@@ -8,6 +8,8 @@ COSA FA:
 - /squadre               -> mostra elenco squadre iscritte (visibile a tutti)
 - /ritira NomeSquadra    -> annulla un'iscrizione (nome obbligatorio solo se
                             hai più di una squadra iscritta, es. admin)
+- /torneo                -> mostra il nome del torneo attuale
+- /nometorneo Nome       -> (solo admin) imposta il nome del torneo corrente
 - /chiudi                -> (solo admin) blocca nuove iscrizioni
 - /apri                  -> (solo admin) riapre le iscrizioni
 - /esporta               -> (solo admin) invia CSV delle squadre in privato
@@ -83,6 +85,22 @@ def set_iscrizioni(conn, aperte: bool):
     conn.commit()
 
 
+def get_nome_torneo(conn) -> str:
+    row = conn.execute(
+        "SELECT valore FROM stato WHERE chiave = 'nome_torneo'"
+    ).fetchone()
+    return row[0] if row else "Torneo"
+
+
+def set_nome_torneo(conn, nome: str):
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES ('nome_torneo', ?) "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore",
+        (nome,),
+    )
+    conn.commit()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
@@ -138,7 +156,7 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     totale = conn.execute("SELECT COUNT(*) FROM squadre").fetchone()[0]
     await update.message.reply_text(
-        f"✅ Squadra '{nome_squadra}' iscritta! (n° {totale} nell'elenco)"
+        f"✅ Squadra '{nome_squadra}' iscritta a {get_nome_torneo(conn)}! (n° {totale} nell'elenco)"
     )
 
 
@@ -152,7 +170,7 @@ async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nessuna squadra iscritta finora.")
         return
 
-    testo = "🏆 Squadre iscritte:\n\n"
+    testo = f"🏆 Squadre iscritte — {get_nome_torneo(conn)}\n\n"
     for i, (nome,) in enumerate(righe, start=1):
         testo += f"{i}. {nome}\n"
     testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
@@ -193,6 +211,24 @@ async def ritira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.execute("DELETE FROM squadre WHERE id = ?", (squadra_id,))
     conn.commit()
     await update.message.reply_text(f"Iscrizione di '{nome}' annullata.")
+
+
+async def nometorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    if not context.args:
+        await update.message.reply_text("Uso corretto: /nometorneo Nome Del Torneo")
+        return
+    conn = db_connect()
+    nome = " ".join(context.args).strip()
+    set_nome_torneo(conn, nome)
+    await update.message.reply_text(f"Nome torneo impostato: '{nome}'")
+
+
+async def torneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = db_connect()
+    await update.message.reply_text(f"🏓 Torneo attuale: {get_nome_torneo(conn)}")
 
 
 async def chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,6 +296,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Bot iscrizioni torneo attivo.\n\n"
         "/iscrivi NomeSquadra — iscrivi la tua squadra\n"
         "/squadre — vedi l'elenco\n"
+        "/torneo — vedi il nome del torneo attuale\n"
         "/ritira [NomeSquadra] — annulla un'iscrizione"
     )
 
@@ -270,6 +307,8 @@ def main():
     app.add_handler(CommandHandler("iscrivi", iscrivi))
     app.add_handler(CommandHandler("squadre", squadre))
     app.add_handler(CommandHandler("ritira", ritira))
+    app.add_handler(CommandHandler("nometorneo", nometorneo))
+    app.add_handler(CommandHandler("torneo", torneo))
     app.add_handler(CommandHandler("chiudi", chiudi))
     app.add_handler(CommandHandler("apri", apri))
     app.add_handler(CommandHandler("esporta", esporta))
