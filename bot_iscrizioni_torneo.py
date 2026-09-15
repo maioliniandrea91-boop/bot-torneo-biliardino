@@ -3,9 +3,11 @@ Bot Telegram — Iscrizioni squadre torneo biliardino
 =====================================================
 
 COSA FA:
-- /iscrivi NomeSquadra   -> registra la squadra (1 per utente Telegram)
-- /squadre               -> mostra elenco squadre iscritte
-- /ritira                -> annulla la propria iscrizione
+- /iscrivi NomeSquadra   -> registra la squadra (1 per utente normale;
+                            gli admin possono iscriverne quante ne vogliono)
+- /squadre               -> mostra elenco squadre iscritte (visibile a tutti)
+- /ritira NomeSquadra    -> annulla un'iscrizione (nome obbligatorio solo se
+                            hai più di una squadra iscritta, es. admin)
 - /chiudi                -> (solo admin) blocca nuove iscrizioni
 - /apri                  -> (solo admin) riapre le iscrizioni
 - /esporta               -> (solo admin) invia CSV delle squadre in privato
@@ -48,7 +50,8 @@ def db_connect():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS squadre (
-            user_id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
             username TEXT,
             nome_squadra TEXT NOT NULL,
             iscritto_il TEXT NOT NULL
@@ -98,14 +101,17 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome_squadra = " ".join(context.args).strip()
 
-    esistente = conn.execute(
-        "SELECT nome_squadra FROM squadre WHERE user_id = ?", (user.id,)
-    ).fetchone()
-    if esistente:
-        await update.message.reply_text(
-            f"Sei già iscritto come '{esistente[0]}'. Usa /ritira prima di reiscriverti."
-        )
-        return
+    # Il limite di 1 squadra per persona vale solo per gli utenti normali.
+    # Gli admin possono iscrivere più squadre (es. per conto di chi non usa Telegram).
+    if not is_admin(user.id):
+        esistente = conn.execute(
+            "SELECT nome_squadra FROM squadre WHERE user_id = ?", (user.id,)
+        ).fetchone()
+        if esistente:
+            await update.message.reply_text(
+                f"Sei già iscritto come '{esistente[0]}'. Usa /ritira prima di reiscriverti."
+            )
+            return
 
     duplicato = conn.execute(
         "SELECT 1 FROM squadre WHERE LOWER(nome_squadra) = LOWER(?)", (nome_squadra,)
@@ -156,17 +162,37 @@ async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ritira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     user = update.effective_user
-    riga = conn.execute(
-        "SELECT nome_squadra FROM squadre WHERE user_id = ?", (user.id,)
-    ).fetchone()
+    proprie = conn.execute(
+        "SELECT id, nome_squadra FROM squadre WHERE user_id = ?", (user.id,)
+    ).fetchall()
 
-    if not riga:
+    if not proprie:
         await update.message.reply_text("Non risulti iscritto a nessuna squadra.")
         return
 
-    conn.execute("DELETE FROM squadre WHERE user_id = ?", (user.id,))
+    nome_indicato = " ".join(context.args).strip() if context.args else None
+
+    if len(proprie) == 1 and not nome_indicato:
+        squadra_id, nome = proprie[0]
+    elif nome_indicato:
+        match = next((p for p in proprie if p[1].lower() == nome_indicato.lower()), None)
+        if not match:
+            elenco = ", ".join(n for _, n in proprie)
+            await update.message.reply_text(
+                f"Non trovo '{nome_indicato}' tra le tue squadre. Le tue: {elenco}"
+            )
+            return
+        squadra_id, nome = match
+    else:
+        elenco = ", ".join(n for _, n in proprie)
+        await update.message.reply_text(
+            f"Hai più squadre iscritte. Specifica quale: /ritira NomeSquadra\nLe tue: {elenco}"
+        )
+        return
+
+    conn.execute("DELETE FROM squadre WHERE id = ?", (squadra_id,))
     conn.commit()
-    await update.message.reply_text(f"Iscrizione di '{riga[0]}' annullata.")
+    await update.message.reply_text(f"Iscrizione di '{nome}' annullata.")
 
 
 async def chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,7 +260,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Bot iscrizioni torneo attivo.\n\n"
         "/iscrivi NomeSquadra — iscrivi la tua squadra\n"
         "/squadre — vedi l'elenco\n"
-        "/ritira — annulla la tua iscrizione"
+        "/ritira [NomeSquadra] — annulla un'iscrizione"
     )
 
 
