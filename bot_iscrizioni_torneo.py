@@ -492,19 +492,20 @@ def comandi_pubblici():
     return [(n, d) for n, d in COMANDI if not d.startswith("[admin]")]
 
 
-def testo_help() -> str:
+def testo_help(is_utente_admin: bool) -> str:
+    comandi_da_mostrare = COMANDI if is_utente_admin else comandi_pubblici()
     testo = "🎱 Comandi disponibili:\n\n"
-    for nome, descrizione in COMANDI:
+    for nome, descrizione in comandi_da_mostrare:
         testo += f"/{nome} — {descrizione}\n"
     return testo
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(testo_help())
+    await update.message.reply_text(testo_help(is_admin(update.effective_user.id)))
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(testo_help())
+    await update.message.reply_text(testo_help(is_admin(update.effective_user.id)))
 
 
 async def imposta_menu_comandi(application):
