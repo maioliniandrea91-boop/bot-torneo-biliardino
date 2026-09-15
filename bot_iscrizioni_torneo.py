@@ -160,6 +160,22 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
+    righe = conn.execute(
+        "SELECT nome_squadra FROM squadre WHERE torneo_id = ? ORDER BY iscritto_il",
+        (torneo_id,),
+    ).fetchall()
+
+    if not righe:
+        return f"Nessuna squadra ancora iscritta a {nome_torneo}."
+
+    testo = f"🏆 Squadre iscritte — {nome_torneo}\n\n"
+    for i, (nome,) in enumerate(righe, start=1):
+        testo += f"{i}. {nome}\n"
+    testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
+    return testo
+
+
 async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     user = update.effective_user
@@ -219,25 +235,13 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ Squadra '{nome_squadra}' iscritta a {nome_torneo}! (n° {totale} nell'elenco)"
     )
+    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
 
 
 async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     torneo_id, nome_torneo = get_torneo_attivo(conn)
-    righe = conn.execute(
-        "SELECT nome_squadra FROM squadre WHERE torneo_id = ? ORDER BY iscritto_il",
-        (torneo_id,),
-    ).fetchall()
-
-    if not righe:
-        await update.message.reply_text(f"Nessuna squadra ancora iscritta a {nome_torneo}.")
-        return
-
-    testo = f"🏆 Squadre iscritte — {nome_torneo}\n\n"
-    for i, (nome,) in enumerate(righe, start=1):
-        testo += f"{i}. {nome}\n"
-    testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
-    await update.message.reply_text(testo)
+    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
 
 
 async def ritira(update: Update, context: ContextTypes.DEFAULT_TYPE):
