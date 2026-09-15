@@ -3,6 +3,7 @@ Bot Telegram — Iscrizioni squadre torneo biliardino
 =====================================================
 
 COSA FA:
+- /help                   -> mostra la lista di tutti i comandi con descrizione
 - /iscrivi NomeSquadra   -> registra la squadra al torneo attivo (1 per
                             utente normale; gli admin possono iscriverne
                             quante ne vogliono)
@@ -41,7 +42,7 @@ import os
 import sqlite3
 from datetime import datetime
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -56,6 +57,23 @@ ADMIN_IDS = {int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") 
 DB_PATH = "iscrizioni.db"
 MAX_SQUADRE = 18  # limite massimo di coppie iscrivibili al torneo
 NOME_TORNEO_INIZIALE = "Torneo"
+
+# Elenco comandi con descrizione breve, usato sia da /help sia dal menu
+# nativo di Telegram (quello che compare scrivendo "/").
+COMANDI = [
+    ("iscrivi", "Iscrivi la tua squadra al torneo attivo — es. /iscrivi Rossi-Bianchi"),
+    ("squadre", "Mostra l'elenco delle squadre iscritte al torneo attivo"),
+    ("ritira", "Annulla una tua iscrizione (indica il nome se ne hai più di una)"),
+    ("torneo", "Mostra il nome del torneo attualmente attivo"),
+    ("storico", "Mostra gli ultimi tornei, o i dettagli di uno (/storico Nome)"),
+    ("help", "Mostra questa lista di comandi"),
+    ("podio", "[admin] Registra e annuncia il podio — /podio Sq1 | Sq2 | Sq3"),
+    ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo"),
+    ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
+    ("apri", "[admin] Riapre le iscrizioni"),
+    ("esporta", "[admin] Invia il CSV delle squadre del torneo attivo in privato"),
+    ("reset", "[admin] Svuota le iscrizioni del torneo attivo (richiede conferma)"),
+]
 # =========================================
 
 
@@ -464,20 +482,32 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Elenco squadre di '{nome_torneo}' svuotato.")
 
 
+def testo_help() -> str:
+    testo = "🎱 Comandi disponibili:\n\n"
+    for nome, descrizione in COMANDI:
+        testo += f"/{nome} — {descrizione}\n"
+    return testo
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Bot iscrizioni torneo attivo.\n\n"
-        "/iscrivi NomeSquadra — iscrivi la tua squadra\n"
-        "/squadre — vedi l'elenco del torneo attivo\n"
-        "/torneo — vedi il nome del torneo attuale\n"
-        "/storico — vedi gli ultimi tornei\n"
-        "/ritira [NomeSquadra] — annulla un'iscrizione"
-    )
+    await update.message.reply_text(testo_help())
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(testo_help())
+
+
+async def imposta_menu_comandi(application):
+    """Registra i comandi nel menu nativo di Telegram (quello che compare
+    scrivendo '/' nella chat), così sono visibili senza dover chiedere."""
+    comandi_telegram = [BotCommand(nome, descrizione[:256]) for nome, descrizione in COMANDI]
+    await application.bot.set_my_commands(comandi_telegram)
 
 
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(imposta_menu_comandi).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("iscrivi", iscrivi))
     app.add_handler(CommandHandler("squadre", squadre))
     app.add_handler(CommandHandler("ritira", ritira))
