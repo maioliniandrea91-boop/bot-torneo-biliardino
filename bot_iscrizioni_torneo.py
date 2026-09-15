@@ -42,11 +42,13 @@ import os
 import sqlite3
 from datetime import datetime
 
-from telegram import BotCommand, Update
+from telegram import BotCommand, BotCommandScopeChatAdministrators, Update
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 # ============ CONFIGURAZIONE ============
@@ -482,6 +484,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Elenco squadre di '{nome_torneo}' svuotato.")
 
 
+def comandi_pubblici():
+    return [(n, d) for n, d in COMANDI if not d.startswith("[admin]")]
+
+
 def testo_help() -> str:
     testo = "🎱 Comandi disponibili:\n\n"
     for nome, descrizione in COMANDI:
@@ -499,9 +505,39 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def imposta_menu_comandi(application):
     """Registra i comandi nel menu nativo di Telegram (quello che compare
-    scrivendo '/' nella chat), così sono visibili senza dover chiedere."""
-    comandi_telegram = [BotCommand(nome, descrizione[:256]) for nome, descrizione in COMANDI]
-    await application.bot.set_my_commands(comandi_telegram)
+    scrivendo '/'). Il menu di default (chat private, o prima che venga
+    rilevato un gruppo) mostra solo i comandi pubblici."""
+    comandi_default = [BotCommand(nome, descrizione[:256]) for nome, descrizione in comandi_pubblici()]
+    await application.bot.set_my_commands(comandi_default)
+
+
+async def imposta_menu_per_gruppo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """La prima volta che il bot riceve un messaggio in un dato gruppo,
+    imposta per gli amministratori DI QUEL GRUPPO il menu completo
+    (comandi pubblici + admin). Gli altri membri continuano a vedere
+    solo il menu pubblico di default."""
+    chat = update.effective_chat
+    if chat is None or chat.type not in ("group", "supergroup"):
+        return
+
+    conn = db_connect()
+    chiave = f"menu_admin_impostato_{chat.id}"
+    gia_impostato = conn.execute(
+        "SELECT 1 FROM stato WHERE chiave = ?", (chiave,)
+    ).fetchone()
+    if gia_impostato:
+        return
+
+    comandi_completi = [BotCommand(nome, descrizione[:256]) for nome, descrizione in COMANDI]
+    await context.bot.set_my_commands(
+        comandi_completi, scope=BotCommandScopeChatAdministrators(chat.id)
+    )
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES (?, '1') "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = '1'",
+        (chiave,),
+    )
+    conn.commit()
 
 
 def main():
@@ -519,6 +555,7 @@ def main():
     app.add_handler(CommandHandler("apri", apri))
     app.add_handler(CommandHandler("esporta", esporta))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
 
     print("Bot avviato. Premi Ctrl+C per fermarlo.")
     app.run_polling()
