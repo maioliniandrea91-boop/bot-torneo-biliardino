@@ -44,7 +44,7 @@ import os
 import sqlite3
 from datetime import datetime
 
-from telegram import BotCommand, BotCommandScopeChatAdministrators, ForceReply, Update
+from telegram import BotCommand, BotCommandScopeChatAdministrators, Update
 from telegram.ext import (
     Application,
     CommandHandler,
