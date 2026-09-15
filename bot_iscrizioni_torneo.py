@@ -145,7 +145,7 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     righe = conn.execute(
-        "SELECT nome_squadra, username FROM squadre ORDER BY iscritto_il"
+        "SELECT nome_squadra FROM squadre ORDER BY iscritto_il"
     ).fetchall()
 
     if not righe:
@@ -153,8 +153,8 @@ async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     testo = "🏆 Squadre iscritte:\n\n"
-    for i, (nome, username) in enumerate(righe, start=1):
-        testo += f"{i}. {nome} (@{username})\n"
+    for i, (nome,) in enumerate(righe, start=1):
+        testo += f"{i}. {nome}\n"
     testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
     await update.message.reply_text(testo)
 
