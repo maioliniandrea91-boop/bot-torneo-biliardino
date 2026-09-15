@@ -6,9 +6,7 @@ COSA FA:
 - /help                   -> mostra la lista di tutti i comandi con descrizione
 - /iscrivi NomeSquadra   -> registra la squadra al torneo attivo (1 per
                             utente normale; gli admin possono iscriverne
-                            quante ne vogliono). Se scritto senza nome,
-                            apre una richiesta guidata: rispondi solo con
-                            il nome, senza riscrivere il comando.
+                            quante ne vogliono)
 - /squadre               -> mostra elenco squadre iscritte al torneo attivo
 - /ritira NomeSquadra    -> annulla un'iscrizione (nome obbligatorio solo se
                             hai più di una squadra iscritta, es. admin)
@@ -178,9 +176,7 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     return testo
 
 
-async def registra_squadra(update: Update, context: ContextTypes.DEFAULT_TYPE, nome_squadra: str):
-    """Logica di registrazione vera e propria, usata sia da /iscrivi NomeSquadra
-    sia dal flusso guidato quando si scrive /iscrivi senza argomenti."""
+async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     user = update.effective_user
     torneo_id, nome_torneo = get_torneo_attivo(conn)
@@ -189,11 +185,14 @@ async def registra_squadra(update: Update, context: ContextTypes.DEFAULT_TYPE, n
         await update.message.reply_text("Le iscrizioni sono chiuse. Contatta un admin.")
         return
 
-    nome_squadra = nome_squadra.strip()
-    if not nome_squadra:
-        await update.message.reply_text("Il nome squadra non può essere vuoto. Riprova con /iscrivi")
+    if not context.args:
+        await update.message.reply_text("Uso corretto: /iscrivi NomeSquadra")
         return
 
+    nome_squadra = " ".join(context.args).strip()
+
+    # Il limite di 1 squadra per persona vale solo per gli utenti normali,
+    # e solo all'interno del torneo attivo corrente.
     if not is_admin(user.id):
         esistente = conn.execute(
             "SELECT nome_squadra FROM squadre WHERE user_id = ? AND torneo_id = ?",
@@ -237,28 +236,6 @@ async def registra_squadra(update: Update, context: ContextTypes.DEFAULT_TYPE, n
         f"✅ Squadra '{nome_squadra}' iscritta a {nome_torneo}! (n° {totale} nell'elenco)"
     )
     await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
-
-
-async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        # Nessun nome fornito: apre una richiesta guidata invece di dare
-        # solo un messaggio di errore con la sintassi da ricordare a memoria.
-        context.user_data["attesa_nome_squadra"] = True
-        await update.message.reply_text(
-            "Scrivi il nome della squadra da iscrivere:",
-            reply_markup=ForceReply(selective=True),
-        )
-        return
-
-    nome_squadra = " ".join(context.args)
-    await registra_squadra(update, context, nome_squadra)
-
-
-async def gestisci_messaggio_libero(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Intercetta la risposta a una richiesta guidata (es. dopo /iscrivi senza
-    argomenti) e la tratta come il dato mancante. Ignora ogni altro messaggio."""
-    if context.user_data.pop("attesa_nome_squadra", False):
-        await registra_squadra(update, context, update.message.text or "")
 
 
 async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -583,7 +560,6 @@ def main():
     app.add_handler(CommandHandler("apri", apri))
     app.add_handler(CommandHandler("esporta", esporta))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, gestisci_messaggio_libero), group=0)
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
 
     print("Bot avviato. Premi Ctrl+C per fermarlo.")
