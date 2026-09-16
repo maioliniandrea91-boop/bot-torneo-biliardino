@@ -13,6 +13,9 @@ COSA FA:
 - /rimuovi NomeSquadra   -> (solo admin) rimuove qualsiasi squadra dal
                             torneo attivo, indipendentemente da chi l'ha
                             iscritta (moderazione contro iscrizioni fasulle)
+- /eliminatorneo Nome CONFERMA -> (solo admin) elimina per sempre un torneo
+                            ARCHIVIATO dallo storico (non funziona sul
+                            torneo attivo, per sicurezza)
 - /torneo                -> mostra il nome del torneo attuale
 - /nometorneo Nome       -> (solo admin) apre un nuovo torneo con questo nome
                             e archivia automaticamente quello precedente
@@ -78,6 +81,7 @@ COMANDI = [
     ("podio", "[admin] Registra e annuncia il podio — /podio Sq1 | Sq2 | Sq3"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo"),
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
+    ("eliminatorneo", "[admin] Elimina per sempre un torneo archiviato dallo storico"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
     ("esporta", "[admin] Invia il CSV delle squadre del torneo attivo in privato"),
@@ -321,6 +325,56 @@ async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"🗑️ Squadra '{nome_reale}' rimossa da {nome_torneo}.")
     await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
+
+
+async def eliminatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando admin: elimina definitivamente un torneo ARCHIVIATO dallo
+    storico (utile per ripulire test o tornei vuoti). Non permette di
+    eliminare il torneo attualmente attivo, per evitare di cancellare
+    per sbaglio quello su cui la gente si sta iscrivendo ora."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+
+    if len(context.args) < 2 or context.args[-1] != "CONFERMA":
+        await update.message.reply_text(
+            "Questo elimina PER SEMPRE un torneo dallo storico (squadre incluse).\n"
+            "Uso corretto: /eliminatorneo NomeTorneo CONFERMA"
+        )
+        return
+
+    nome_cercato = " ".join(context.args[:-1]).strip()
+    conn = db_connect()
+
+    torneo_row = conn.execute(
+        "SELECT id, chiuso FROM tornei WHERE LOWER(nome) = LOWER(?) ORDER BY id DESC LIMIT 1",
+        (nome_cercato,),
+    ).fetchone()
+
+    if not torneo_row:
+        await update.message.reply_text(f"Nessun torneo trovato con nome '{nome_cercato}'.")
+        return
+
+    torneo_id, chiuso = torneo_row
+    if not chiuso:
+        await update.message.reply_text(
+            "Non puoi eliminare il torneo ATTIVO. Aprine prima uno nuovo con "
+            "/nometorneo per archiviarlo, poi elimina quello archiviato."
+        )
+        return
+
+    n_squadre = conn.execute(
+        "SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_id,)
+    ).fetchone()[0]
+
+    conn.execute("DELETE FROM squadre WHERE torneo_id = ?", (torneo_id,))
+    conn.execute("DELETE FROM tornei WHERE id = ?", (torneo_id,))
+    conn.commit()
+
+    await update.message.reply_text(
+        f"🗑️ Torneo '{nome_cercato}' eliminato definitivamente dallo storico "
+        f"({n_squadre} squadre rimosse con lui)."
+    )
 
 
 async def nometorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -594,6 +648,7 @@ def main():
     app.add_handler(CommandHandler("squadre", squadre))
     app.add_handler(CommandHandler("ritira", ritira))
     app.add_handler(CommandHandler("rimuovi", rimuovi))
+    app.add_handler(CommandHandler("eliminatorneo", eliminatorneo))
     app.add_handler(CommandHandler("nometorneo", nometorneo))
     app.add_handler(CommandHandler("torneo", torneo))
     app.add_handler(CommandHandler("storico", storico))
