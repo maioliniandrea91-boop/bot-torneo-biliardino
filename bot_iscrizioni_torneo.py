@@ -17,8 +17,8 @@ COSA FA:
                             ARCHIVIATO dallo storico (non funziona sul
                             torneo attivo, per sicurezza)
 - /torneo                -> mostra il nome del torneo attuale
-- /nometorneo Nome       -> (solo admin) apre un nuovo torneo con questo nome
-                            e archivia automaticamente quello precedente
+- /nometorneo Nome CONFERMA -> (solo admin) apre un nuovo torneo con questo
+                            nome e archivia automaticamente quello precedente
                             (squadre incluse, restano consultabili in /storico)
 - /storico                -> mostra gli ultimi 10 tornei con conteggio squadre
 - /storico Nome           -> mostra le squadre e il podio di un torneo passato
@@ -79,7 +79,7 @@ COMANDI = [
     ("storico", "Mostra gli ultimi tornei, o i dettagli di uno (/storico Nome)"),
     ("help", "Mostra questa lista di comandi"),
     ("podio", "[admin] Registra e annuncia il podio — /podio Sq1 | Sq2 | Sq3"),
-    ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo"),
+    ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
     ("eliminatorneo", "[admin] Elimina per sempre un torneo archiviato dallo storico"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
@@ -381,12 +381,19 @@ async def nometorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Comando riservato agli admin.")
         return
-    if not context.args:
-        await update.message.reply_text("Uso corretto: /nometorneo Nome Del Torneo")
-        return
 
     conn = db_connect()
-    nuovo_nome = " ".join(context.args).strip()
+    _, vecchio_nome_preview = get_torneo_attivo(conn)
+
+    if len(context.args) < 2 or context.args[-1] != "CONFERMA":
+        await update.message.reply_text(
+            f"Questo chiude SUBITO il torneo attivo ('{vecchio_nome_preview}') per tutti "
+            "e ne apre uno nuovo.\n"
+            "Uso corretto: /nometorneo Nome Del Torneo CONFERMA"
+        )
+        return
+
+    nuovo_nome = " ".join(context.args[:-1]).strip()
     vecchio_id, vecchio_nome = get_torneo_attivo(conn)
 
     if nuovo_nome.lower() == vecchio_nome.lower():
