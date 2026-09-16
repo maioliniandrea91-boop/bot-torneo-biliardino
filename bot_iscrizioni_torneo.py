@@ -596,11 +596,13 @@ def testo_help(is_utente_admin: bool) -> str:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(testo_help(is_admin(update.effective_user.id)))
+    mostra_admin = is_admin(update.effective_user.id) and update.effective_chat.type == "private"
+    await update.message.reply_text(testo_help(mostra_admin))
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(testo_help(is_admin(update.effective_user.id)))
+    mostra_admin = is_admin(update.effective_user.id) and update.effective_chat.type == "private"
+    await update.message.reply_text(testo_help(mostra_admin))
 
 
 async def imposta_menu_comandi(application):
