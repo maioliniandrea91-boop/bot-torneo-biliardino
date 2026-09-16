@@ -10,6 +10,9 @@ COSA FA:
 - /squadre               -> mostra elenco squadre iscritte al torneo attivo
 - /ritira NomeSquadra    -> annulla un'iscrizione (nome obbligatorio solo se
                             hai più di una squadra iscritta, es. admin)
+- /rimuovi NomeSquadra   -> (solo admin) rimuove qualsiasi squadra dal
+                            torneo attivo, indipendentemente da chi l'ha
+                            iscritta (moderazione contro iscrizioni fasulle)
 - /torneo                -> mostra il nome del torneo attuale
 - /nometorneo Nome       -> (solo admin) apre un nuovo torneo con questo nome
                             e archivia automaticamente quello precedente
@@ -30,7 +33,10 @@ SETUP:
 2. Sostituisci TOKEN con quello di @BotFather
 3. Sostituisci ADMIN_IDS con gli ID Telegram numerici degli admin
    (per scoprire il proprio ID, scrivi a @userinfobot su Telegram)
-4. python bot_iscrizioni_torneo.py
+4. (opzionale) Imposta DB_PATH per salvare il database in un percorso
+   specifico, es. su un volume persistente (vedi nota HOSTING in fondo).
+   Se non impostata, usa "iscrizioni.db" nella cartella corrente.
+5. python bot_iscrizioni_torneo.py
 
 Il bot va lasciato in esecuzione (polling). Per hosting 24/7 vedi
 nota in fondo al file.
@@ -56,7 +62,7 @@ from telegram.ext import (
 # piattaforma di hosting, es. Railway) invece che scritti qui nel codice.
 TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_IDS = {int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
-DB_PATH = "iscrizioni.db"
+DB_PATH = os.environ.get("DB_PATH", "iscrizioni.db")
 MAX_SQUADRE = 18  # limite massimo di coppie iscrivibili al torneo
 NOME_TORNEO_INIZIALE = "Torneo"
 
@@ -71,6 +77,7 @@ COMANDI = [
     ("help", "Mostra questa lista di comandi"),
     ("podio", "[admin] Registra e annuncia il podio — /podio Sq1 | Sq2 | Sq3"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo"),
+    ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
     ("esporta", "[admin] Invia il CSV delle squadre del torneo attivo in privato"),
@@ -280,6 +287,40 @@ async def ritira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.execute("DELETE FROM squadre WHERE id = ?", (squadra_id,))
     conn.commit()
     await update.message.reply_text(f"Iscrizione di '{nome}' annullata.")
+
+
+async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando admin: rimuove QUALSIASI squadra dal torneo attivo,
+    indipendentemente da chi l'ha iscritta. Diverso da /ritira, che è
+    self-service e tocca solo le proprie squadre."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    if not context.args:
+        await update.message.reply_text("Uso corretto: /rimuovi NomeSquadra")
+        return
+
+    conn = db_connect()
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    nome_cercato = " ".join(context.args).strip()
+
+    match = conn.execute(
+        "SELECT id, nome_squadra FROM squadre WHERE torneo_id = ? AND LOWER(nome_squadra) = LOWER(?)",
+        (torneo_id, nome_cercato),
+    ).fetchone()
+
+    if not match:
+        await update.message.reply_text(
+            f"Nessuna squadra '{nome_cercato}' trovata in {nome_torneo}. Controlla /squadre."
+        )
+        return
+
+    squadra_id, nome_reale = match
+    conn.execute("DELETE FROM squadre WHERE id = ?", (squadra_id,))
+    conn.commit()
+
+    await update.message.reply_text(f"🗑️ Squadra '{nome_reale}' rimossa da {nome_torneo}.")
+    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
 
 
 async def nometorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -552,6 +593,7 @@ def main():
     app.add_handler(CommandHandler("iscrivi", iscrivi))
     app.add_handler(CommandHandler("squadre", squadre))
     app.add_handler(CommandHandler("ritira", ritira))
+    app.add_handler(CommandHandler("rimuovi", rimuovi))
     app.add_handler(CommandHandler("nometorneo", nometorneo))
     app.add_handler(CommandHandler("torneo", torneo))
     app.add_handler(CommandHandler("storico", storico))
