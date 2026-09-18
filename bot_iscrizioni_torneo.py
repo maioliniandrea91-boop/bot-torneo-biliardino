@@ -49,7 +49,8 @@ import csv
 import io
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, BotCommandScopeChatAdministrators, Update
 from telegram.ext import (
@@ -69,6 +70,10 @@ DB_PATH = os.environ.get("DB_PATH", "iscrizioni.db")
 MAX_SQUADRE = 18  # limite massimo di coppie iscrivibili al torneo
 NOME_TORNEO_INIZIALE = "Torneo"
 
+# --- Sondaggio settimanale "gioco libero" ---
+CHIAVE_CHAT_GIOCO_LIBERO = "chat_id_gioco_libero"
+ORARIO_SONDAGGIO_GIOCO_LIBERO = time(hour=12, minute=0, tzinfo=ZoneInfo("Europe/Rome"))
+
 # Elenco comandi con descrizione breve, usato sia da /help sia dal menu
 # nativo di Telegram (quello che compare scrivendo "/").
 COMANDI = [
@@ -86,6 +91,8 @@ COMANDI = [
     ("apri", "[admin] Riapre le iscrizioni"),
     ("esporta", "[admin] Invia il CSV delle squadre del torneo attivo in privato"),
     ("reset", "[admin] Svuota le iscrizioni del torneo attivo (richiede conferma)"),
+    ("registragruppo", "[admin] Registra QUESTO gruppo come destinazione del sondaggio gioco libero (una tantum)"),
+    ("sondaggio", "[admin] Invia subito il sondaggio 'vieni al gioco libero stasera?'"),
 ]
 # =========================================
 
@@ -544,6 +551,75 @@ async def apri(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔓 Iscrizioni riaperte.")
 
 
+async def invia_sondaggio_gioco_libero(bot, chat_id: int):
+    """Invia il poll non anonimo: Telegram mostra da solo, nell'interfaccia
+    del sondaggio, chi ha votato cosa — non serve salvare nulla nel DB."""
+    await bot.send_poll(
+        chat_id=chat_id,
+        question="Vieni al gioco libero di stasera? 🎱",
+        options=["Sì ✅", "No ❌"],
+        is_anonymous=False,
+        allows_multiple_answers=False,
+    )
+
+
+async def registragruppo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando admin, da eseguire UNA TANTUM dentro il gruppo giusto: salva
+    l'ID di quel gruppo come destinazione del sondaggio settimanale."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    if update.effective_chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("Usa questo comando dentro il gruppo da registrare, non in privato.")
+        return
+
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES (?, ?) "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore",
+        (CHIAVE_CHAT_GIOCO_LIBERO, str(update.effective_chat.id)),
+    )
+    conn.commit()
+    await update.message.reply_text(
+        "✅ Questo gruppo è registrato. Ogni lunedì alle "
+        f"{ORARIO_SONDAGGIO_GIOCO_LIBERO.strftime('%H:%M')} partirà qui il sondaggio "
+        "del gioco libero. Puoi anche lanciarlo a mano con /sondaggio."
+    )
+
+
+async def sondaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando admin: invia subito il sondaggio nel gruppo registrato con
+    /registragruppo (puoi lanciarlo anche da chat privata con il bot)."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_CHAT_GIOCO_LIBERO,)
+    ).fetchone()
+    if not row:
+        await update.message.reply_text(
+            "Nessun gruppo registrato. Vai nel gruppo giusto e manda /registragruppo (una tantum)."
+        )
+        return
+
+    chat_id_destinazione = int(row[0])
+    await invia_sondaggio_gioco_libero(context.bot, chat_id_destinazione)
+    if update.effective_chat.id != chat_id_destinazione:
+        await update.message.reply_text("Sondaggio inviato nel gruppo registrato.")
+
+
+async def sondaggio_automatico(context: ContextTypes.DEFAULT_TYPE):
+    """Callback schedulato: gira ogni lunedì all'orario impostato."""
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_CHAT_GIOCO_LIBERO,)
+    ).fetchone()
+    if row:
+        await invia_sondaggio_gioco_libero(context.bot, int(row[0]))
+
+
 async def esporta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Comando riservato agli admin.")
@@ -666,7 +742,16 @@ def main():
     app.add_handler(CommandHandler("apri", apri))
     app.add_handler(CommandHandler("esporta", esporta))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("registragruppo", registragruppo))
+    app.add_handler(CommandHandler("sondaggio", sondaggio))
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
+
+    app.job_queue.run_daily(
+        sondaggio_automatico,
+        time=ORARIO_SONDAGGIO_GIOCO_LIBERO,
+        days=(0,),  # 0 = lunedì (convenzione python-telegram-bot: 0=lun ... 6=dom)
+        name="sondaggio_gioco_libero_lunedi",
+    )
 
     print("Bot avviato. Premi Ctrl+C per fermarlo.")
     app.run_polling()
