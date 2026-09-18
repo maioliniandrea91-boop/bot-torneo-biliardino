@@ -47,6 +47,7 @@ nota in fondo al file.
 
 import csv
 import io
+import json
 import os
 import sqlite3
 from datetime import datetime, time
@@ -72,7 +73,11 @@ NOME_TORNEO_INIZIALE = "Torneo"
 
 # --- Sondaggio settimanale "gioco libero" ---
 CHIAVE_CHAT_GIOCO_LIBERO = "chat_id_gioco_libero"
+CHIAVE_DOMANDA_SONDAGGIO = "sondaggio_domanda"
+CHIAVE_OPZIONI_SONDAGGIO = "sondaggio_opzioni"
 ORARIO_SONDAGGIO_GIOCO_LIBERO = time(hour=12, minute=0, tzinfo=ZoneInfo("Europe/Rome"))
+DOMANDA_SONDAGGIO_DEFAULT = "Vieni al gioco libero di stasera? 🎱"
+OPZIONI_SONDAGGIO_DEFAULT = ["Sì ✅", "No ❌"]
 
 # Elenco comandi con descrizione breve, usato sia da /help sia dal menu
 # nativo di Telegram (quello che compare scrivendo "/").
@@ -92,7 +97,10 @@ COMANDI = [
     ("esporta", "[admin] Invia il CSV delle squadre del torneo attivo in privato"),
     ("reset", "[admin] Svuota le iscrizioni del torneo attivo (richiede conferma)"),
     ("registragruppo", "[admin] Registra QUESTO gruppo come destinazione del sondaggio gioco libero (una tantum)"),
-    ("sondaggio", "[admin] Invia subito il sondaggio 'vieni al gioco libero stasera?'"),
+    ("sondaggio", "[admin] Invia subito il sondaggio nel gruppo registrato"),
+    ("vedisondaggio", "[admin] Mostra domanda e opzioni attuali del sondaggio, senza inviarlo"),
+    ("anteprimasondaggio", "[admin] Ti manda il sondaggio in privato, così lo vedi prima che parta nel gruppo"),
+    ("modificasondaggio", "[admin] Cambia domanda/opzioni — /modificasondaggio Domanda | Opzione1 | Opzione2"),
 ]
 # =========================================
 
@@ -551,15 +559,108 @@ async def apri(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔓 Iscrizioni riaperte.")
 
 
-async def invia_sondaggio_gioco_libero(bot, chat_id: int):
+def ottieni_config_sondaggio(conn) -> tuple[str, list[str]]:
+    """Legge domanda/opzioni salvate; se non sono mai state personalizzate
+    ritorna i default definiti in cima al file."""
+    riga_domanda = conn.execute(
+        "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_DOMANDA_SONDAGGIO,)
+    ).fetchone()
+    riga_opzioni = conn.execute(
+        "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_OPZIONI_SONDAGGIO,)
+    ).fetchone()
+
+    domanda = riga_domanda[0] if riga_domanda else DOMANDA_SONDAGGIO_DEFAULT
+    opzioni = json.loads(riga_opzioni[0]) if riga_opzioni else list(OPZIONI_SONDAGGIO_DEFAULT)
+    return domanda, opzioni
+
+
+def imposta_config_sondaggio(conn, domanda: str, opzioni: list[str]):
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES (?, ?) "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore",
+        (CHIAVE_DOMANDA_SONDAGGIO, domanda),
+    )
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES (?, ?) "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore",
+        (CHIAVE_OPZIONI_SONDAGGIO, json.dumps(opzioni)),
+    )
+    conn.commit()
+
+
+async def invia_sondaggio_gioco_libero(bot, chat_id: int, domanda: str, opzioni: list[str]):
     """Invia il poll non anonimo: Telegram mostra da solo, nell'interfaccia
     del sondaggio, chi ha votato cosa — non serve salvare nulla nel DB."""
     await bot.send_poll(
         chat_id=chat_id,
-        question="Vieni al gioco libero di stasera? 🎱",
-        options=["Sì ✅", "No ❌"],
+        question=domanda,
+        options=opzioni,
         is_anonymous=False,
         allows_multiple_answers=False,
+    )
+
+
+async def vedisondaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    conn = db_connect()
+    domanda, opzioni = ottieni_config_sondaggio(conn)
+    testo_opzioni = "\n".join(f"  • {o}" for o in opzioni)
+    await update.message.reply_text(
+        f"📋 Domanda attuale:\n{domanda}\n\nOpzioni:\n{testo_opzioni}\n\n"
+        "Per vederlo renderizzato come poll vero: /anteprimasondaggio\n"
+        "Per cambiarlo: /modificasondaggio Domanda | Opzione1 | Opzione2"
+    )
+
+
+async def anteprimasondaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manda il poll in privato a chi lo richiede (non nel gruppo), così lo
+    si vede esattamente come apparirà, senza disturbare nessuno."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    conn = db_connect()
+    domanda, opzioni = ottieni_config_sondaggio(conn)
+    try:
+        await invia_sondaggio_gioco_libero(context.bot, update.effective_user.id, domanda, opzioni)
+        if update.effective_chat.type != "private":
+            await update.message.reply_text("Anteprima inviata in privato, controlla la chat col bot.")
+    except Exception:
+        await update.message.reply_text(
+            "Non riesco a scriverti in privato: apri prima una chat diretta col bot "
+            "(cercalo su Telegram e premi Start), poi riprova."
+        )
+
+
+async def modificasondaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+
+    testo_args = " ".join(context.args) if context.args else ""
+    parti = [p.strip() for p in testo_args.split("|") if p.strip()]
+
+    if len(parti) < 3:
+        conn = db_connect()
+        domanda, opzioni = ottieni_config_sondaggio(conn)
+        await update.message.reply_text(
+            "Uso corretto: /modificasondaggio Domanda | Opzione1 | Opzione2 [| Opzione3 ...]\n"
+            "Servono una domanda e almeno 2 opzioni (max 10, limite di Telegram).\n\n"
+            f"Attuale — Domanda: {domanda}\nOpzioni: {', '.join(opzioni)}"
+        )
+        return
+
+    domanda, *opzioni = parti
+    if len(opzioni) > 10:
+        await update.message.reply_text("Troppe opzioni: Telegram permette al massimo 10 per un sondaggio.")
+        return
+
+    conn = db_connect()
+    imposta_config_sondaggio(conn, domanda, opzioni)
+    await update.message.reply_text(
+        f"✅ Sondaggio aggiornato.\nDomanda: {domanda}\nOpzioni: {', '.join(opzioni)}\n\n"
+        "Verifica con /anteprimasondaggio prima che parta davvero lunedì."
     )
 
 
@@ -605,7 +706,8 @@ async def sondaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id_destinazione = int(row[0])
-    await invia_sondaggio_gioco_libero(context.bot, chat_id_destinazione)
+    domanda, opzioni = ottieni_config_sondaggio(conn)
+    await invia_sondaggio_gioco_libero(context.bot, chat_id_destinazione, domanda, opzioni)
     if update.effective_chat.id != chat_id_destinazione:
         await update.message.reply_text("Sondaggio inviato nel gruppo registrato.")
 
@@ -617,7 +719,8 @@ async def sondaggio_automatico(context: ContextTypes.DEFAULT_TYPE):
         "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_CHAT_GIOCO_LIBERO,)
     ).fetchone()
     if row:
-        await invia_sondaggio_gioco_libero(context.bot, int(row[0]))
+        domanda, opzioni = ottieni_config_sondaggio(conn)
+        await invia_sondaggio_gioco_libero(context.bot, int(row[0]), domanda, opzioni)
 
 
 async def esporta(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -744,6 +847,9 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("registragruppo", registragruppo))
     app.add_handler(CommandHandler("sondaggio", sondaggio))
+    app.add_handler(CommandHandler("vedisondaggio", vedisondaggio))
+    app.add_handler(CommandHandler("anteprimasondaggio", anteprimasondaggio))
+    app.add_handler(CommandHandler("modificasondaggio", modificasondaggio))
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
 
     app.job_queue.run_daily(
