@@ -27,7 +27,7 @@ COSA FA:
                             una foto, la ripubblica come immagine del podio.
 - /chiudi                -> (solo admin) blocca nuove iscrizioni
 - /apri                  -> (solo admin) riapre le iscrizioni
-- /esporta               -> (solo admin) invia CSV delle squadre in privato
+- /esporta               -> (solo admin) invia elenco squadre in Word (solo nomi) in privato
 - /reset                 -> (solo admin) svuota le squadre del torneo attivo
                             (richiede conferma; lo storico non viene toccato)
 
@@ -45,7 +45,6 @@ Il bot va lasciato in esecuzione (polling). Per hosting 24/7 vedi
 nota in fondo al file.
 """
 
-import csv
 import io
 import json
 import os
@@ -53,6 +52,7 @@ import sqlite3
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
+from docx import Document
 from telegram import BotCommand, BotCommandScopeChatAdministrators, Update
 from telegram.ext import (
     Application,
@@ -94,7 +94,7 @@ COMANDI = [
     ("eliminatorneo", "[admin] Elimina per sempre un torneo archiviato dallo storico"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
-    ("esporta", "[admin] Invia il CSV delle squadre del torneo attivo in privato"),
+    ("esporta", "[admin] Invia l'elenco squadre in Word (solo nomi) in privato"),
     ("reset", "[admin] Svuota le iscrizioni del torneo attivo (richiede conferma)"),
     ("registragruppo", "[admin] Registra QUESTO gruppo come destinazione del sondaggio gioco libero (una tantum)"),
     ("sondaggio", "[admin] Invia subito il sondaggio nel gruppo registrato"),
@@ -731,25 +731,26 @@ async def esporta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     torneo_id, nome_torneo = get_torneo_attivo(conn)
     righe = conn.execute(
-        "SELECT nome_squadra, username, iscritto_il FROM squadre WHERE torneo_id = ? ORDER BY iscritto_il",
+        "SELECT nome_squadra FROM squadre WHERE torneo_id = ? ORDER BY iscritto_il",
         (torneo_id,),
     ).fetchall()
 
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(["Squadra", "Username", "Iscritto il"])
-    writer.writerows(righe)
-    buffer.seek(0)
+    documento = Document()
+    documento.add_heading(nome_torneo, level=1)
+    for (nome_squadra,) in righe:
+        documento.add_paragraph(nome_squadra)
 
-    dati_bytes = io.BytesIO(buffer.getvalue().encode("utf-8"))
-    dati_bytes.name = f"squadre_{nome_torneo}.csv"
+    buffer = io.BytesIO()
+    documento.save(buffer)
+    buffer.seek(0)
+    buffer.name = f"squadre_{nome_torneo}.docx"
 
     await context.bot.send_document(
         chat_id=update.effective_user.id,
-        document=dati_bytes,
-        filename=f"squadre_{nome_torneo}.csv",
+        document=buffer,
+        filename=f"squadre_{nome_torneo}.docx",
     )
-    await update.message.reply_text("CSV inviato in privato.")
+    await update.message.reply_text("Elenco squadre inviato in privato (Word).")
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
