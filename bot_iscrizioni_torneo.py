@@ -856,7 +856,10 @@ def main():
     app.job_queue.run_daily(
         sondaggio_automatico,
         time=ORARIO_SONDAGGIO_GIOCO_LIBERO,
-        days=(0,),  # 0 = lunedì (convenzione python-telegram-bot: 0=lun ... 6=dom)
+        days=(1,),  # ATTENZIONE: dalla versione 20.0 di python-telegram-bot la
+                    # convenzione è cambiata: 0=domenica ... 6=sabato (non più
+                    # 0=lunedì). Quindi lunedì è 1, non 0. Verificato nel
+                    # sorgente della libreria (docstring di JobQueue.run_daily).
         name="sondaggio_gioco_libero_lunedi",
     )
 
