@@ -75,7 +75,7 @@ NOME_TORNEO_INIZIALE = "Torneo"
 CHIAVE_CHAT_GIOCO_LIBERO = "chat_id_gioco_libero"
 CHIAVE_DOMANDA_SONDAGGIO = "sondaggio_domanda"
 CHIAVE_OPZIONI_SONDAGGIO = "sondaggio_opzioni"
-ORARIO_SONDAGGIO_GIOCO_LIBERO = time(hour=12, minute=0, tzinfo=ZoneInfo("Europe/Rome"))
+ORARIO_SONDAGGIO_GIOCO_LIBERO = time(hour=10, minute=0, tzinfo=ZoneInfo("Europe/Rome"))
 DOMANDA_SONDAGGIO_DEFAULT = "Vieni al gioco libero di stasera? 🎱"
 OPZIONI_SONDAGGIO_DEFAULT = ["Sì ✅", "No ❌"]
 
