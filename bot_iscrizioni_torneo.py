@@ -53,6 +53,8 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from docx import Document
+
+import comando_locandina
 from telegram import BotCommand, BotCommandScopeChatAdministrators, Update
 from telegram.ext import (
     Application,
@@ -101,7 +103,7 @@ COMANDI = [
     ("vedisondaggio", "[admin] Mostra domanda e opzioni attuali del sondaggio, senza inviarlo"),
     ("anteprimasondaggio", "[admin] Ti manda il sondaggio in privato, così lo vedi prima che parta nel gruppo"),
     ("modificasondaggio", "[admin] Cambia domanda/opzioni — /modificasondaggio Domanda | Opzione1 | Opzione2"),
-]
+] + comando_locandina.COMANDI_LOCANDINA
 # =========================================
 
 
@@ -829,8 +831,13 @@ async def imposta_menu_per_gruppo(update: Update, context: ContextTypes.DEFAULT_
     conn.commit()
 
 
+async def all_avvio(application):
+    await imposta_menu_comandi(application)
+    await comando_locandina.ripristina_programmate(application)
+
+
 def main():
-    app = Application.builder().token(TOKEN).post_init(imposta_menu_comandi).build()
+    app = Application.builder().token(TOKEN).post_init(all_avvio).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("iscrivi", iscrivi))
@@ -852,6 +859,7 @@ def main():
     app.add_handler(CommandHandler("anteprimasondaggio", anteprimasondaggio))
     app.add_handler(CommandHandler("modificasondaggio", modificasondaggio))
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
+    comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS)
 
     app.job_queue.run_daily(
         sondaggio_automatico,
