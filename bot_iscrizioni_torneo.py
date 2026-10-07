@@ -13,6 +13,8 @@ COSA FA:
 - /rimuovi NomeSquadra   -> (solo admin) rimuove qualsiasi squadra dal
                             torneo attivo, indipendentemente da chi l'ha
                             iscritta (moderazione contro iscrizioni fasulle)
+- /rinomina 3 | Nuovo nome -> (solo admin) corregge il nome di una squadra
+                            (numero da /squadre, oppure nome attuale | nuovo)
 - /eliminatorneo Nome CONFERMA -> (solo admin) elimina per sempre un torneo
                             ARCHIVIATO dallo storico (non funziona sul
                             torneo attivo, per sicurezza)
@@ -93,6 +95,7 @@ COMANDI = [
     ("podio", "[admin] Registra e annuncia il podio — /podio Sq1 | Sq2 | Sq3"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
+    ("rinomina", "[admin] Corregge il nome di una squadra — /rinomina 3 | Antonio-Eva (3 = numero in /squadre)"),
     ("eliminatorneo", "[admin] Elimina per sempre un torneo archiviato dallo storico"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
@@ -341,6 +344,59 @@ async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     await update.message.reply_text(f"🗑️ Squadra '{nome_reale}' rimossa da {nome_torneo}.")
+    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
+
+
+async def rinomina(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando admin: corregge il nome di una squadra del torneo attivo.
+    La squadra resta di chi l'ha iscritta e mantiene la sua posizione.
+    Si indica col numero mostrato da /squadre o col nome attuale:
+      /rinomina 3 | Antonio-Eva
+      /rinomina Antonio e Eva | Antonio-Eva"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+
+    testo_args = " ".join(context.args) if context.args else ""
+    parti = [p.strip() for p in testo_args.split("|")]
+    if len(parti) != 2 or not parti[0] or not parti[1]:
+        await update.message.reply_text(
+            "Uso: /rinomina NUMERO | Nuovo nome  (il numero è quello in /squadre)\n"
+            "oppure: /rinomina Nome attuale | Nuovo nome\n"
+            "Es. /rinomina 3 | Antonio-Eva"
+        )
+        return
+    vecchio, nuovo = parti
+
+    conn = db_connect()
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    righe = conn.execute(
+        "SELECT id, nome_squadra FROM squadre WHERE torneo_id = ? ORDER BY iscritto_il",
+        (torneo_id,),
+    ).fetchall()
+
+    if vecchio.isdigit():
+        pos = int(vecchio)
+        if not 1 <= pos <= len(righe):
+            await update.message.reply_text(f"Non c'è una squadra n° {pos}. Controlla /squadre.")
+            return
+        squadra_id, nome_reale = righe[pos - 1]
+    else:
+        match = next((r for r in righe if r[1].lower() == vecchio.lower()), None)
+        if not match:
+            await update.message.reply_text(
+                f"Nessuna squadra '{vecchio}' in {nome_torneo}. Usa il numero da /squadre."
+            )
+            return
+        squadra_id, nome_reale = match
+
+    if any(r[1].lower() == nuovo.lower() and r[0] != squadra_id for r in righe):
+        await update.message.reply_text(f"Il nome '{nuovo}' è già usato da un'altra squadra.")
+        return
+
+    conn.execute("UPDATE squadre SET nome_squadra = ? WHERE id = ?", (nuovo, squadra_id))
+    conn.commit()
+    await update.message.reply_text(f"✏️ '{nome_reale}' → '{nuovo}'")
     await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
 
 
@@ -844,6 +900,7 @@ def main():
     app.add_handler(CommandHandler("squadre", squadre))
     app.add_handler(CommandHandler("ritira", ritira))
     app.add_handler(CommandHandler("rimuovi", rimuovi))
+    app.add_handler(CommandHandler("rinomina", rinomina))
     app.add_handler(CommandHandler("eliminatorneo", eliminatorneo))
     app.add_handler(CommandHandler("nometorneo", nometorneo))
     app.add_handler(CommandHandler("torneo", torneo))
