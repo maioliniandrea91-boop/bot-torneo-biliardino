@@ -10,6 +10,9 @@ Il bot risponde con l'anteprima e quattro bottoni:
   📢 Pubblica ora   ⏰ Programma   ✏️ Aggiungi testo   ❌ Annulla
 Con "Programma" ti chiede quando: es. 14/10 18:00, oppure domani 18:00.
 Con "Aggiungi testo" scrivi qualcosa che va SOTTO la didascalia standard.
+"Nuovo torneo: SÌ/NO" decide se alla pubblicazione si chiude il torneo attivo
+e si apre quello della locandina (nome tipo "16/10 Rollerball"). Su NO la
+locandina esce e basta: utile per un promemoria a iscrizioni già aperte.
 
 Altri comandi:
   /programmate            -> elenco locandine in attesa di pubblicazione
@@ -58,8 +61,15 @@ def _crea_tabella(conn):
         )
     """)
     colonne = [r[1] for r in conn.execute("PRAGMA table_info(locandine)")]
-    if "extra" not in colonne:
-        conn.execute("ALTER TABLE locandine ADD COLUMN extra TEXT")  # testo aggiunto a mano
+    for nome, tipo in (("extra", "TEXT"),            # testo aggiunto a mano
+                       ("nome_torneo", "TEXT"),      # torneo da aprire alla pubblicazione
+                       ("data_torneo", "TEXT"),
+                       ("nuovo_torneo", "INTEGER NOT NULL DEFAULT 1")):  # 1 = apre il torneo
+        if nome not in colonne:
+            conn.execute(f"ALTER TABLE locandine ADD COLUMN {nome} {tipo}")
+    # data di gioco salvata anche nei tornei, per sapere se un torneo è già stato giocato
+    if "data_torneo" not in [r[1] for r in conn.execute("PRAGMA table_info(tornei)")]:
+        conn.execute("ALTER TABLE tornei ADD COLUMN data_torneo TEXT")
     conn.commit()
 
 
@@ -154,6 +164,69 @@ def _didascalia(dati) -> str:
     )
 
 
+def _nome_torneo(conn, dati) -> str:
+    """'16/10 Rollerball'; se il nome esiste già nello storico aggiunge l'anno."""
+    d = dati["data"]
+    formula = dati["formula"].capitalize()
+    nome = f"{d.day:02d}/{d.month:02d} {formula}"
+    if conn.execute("SELECT 1 FROM tornei WHERE LOWER(nome) = LOWER(?)", (nome,)).fetchone():
+        nome = f"{d.day:02d}/{d.month:02d}/{d.year % 100:02d} {formula}"
+    return nome
+
+
+def _piano_torneo(conn, lid: int):
+    """Cosa succederà ai tornei alla pubblicazione.
+    Ritorna (si_cambia, testo_per_te)."""
+    row = conn.execute(
+        "SELECT nome_torneo, data_torneo, nuovo_torneo FROM locandine WHERE id = ?", (lid,)
+    ).fetchone()
+    nome_nuovo, data_nuovo, flag = row
+    att = conn.execute(
+        "SELECT id, nome, data_torneo FROM tornei WHERE chiuso = 0 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if not flag:
+        nome_att = att[1] if att else "nessuno"
+        return False, f"Torneo: nessun cambio, resta attivo '{nome_att}'."
+    if not nome_nuovo:
+        return False, "Torneo: nessun cambio."
+    if att and att[1].lower() == nome_nuovo.lower():
+        return False, f"Torneo: '{nome_nuovo}' è già quello attivo, nessun cambio."
+    if att and att[2] and date.fromisoformat(att[2]) >= datetime.now(FUSO).date():
+        # sicurezza: il torneo attivo non è ancora stato giocato
+        return False, (
+            f"⚠️ Torneo: '{att[1]}' non è ancora stato giocato, quindi NON lo chiudo. "
+            "La locandina esce lo stesso; il cambio torneo fallo a mano."
+        )
+    n = conn.execute("SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (att[0],)).fetchone()[0] if att else 0
+    vecchio = f"archivio '{att[1]}' ({n} {'squadra' if n == 1 else 'squadre'}) e " if att else ""
+    return True, f"Torneo: alla pubblicazione {vecchio}apro '{nome_nuovo}' con iscrizioni aperte."
+
+
+def _cambia_torneo(conn, lid: int) -> str | None:
+    """Esegue il cambio torneo se previsto. Ritorna il testo per te, o None."""
+    si, testo = _piano_torneo(conn, lid)
+    if not si:
+        return testo if testo.startswith("⚠️") else None
+    nome_nuovo, data_nuovo = conn.execute(
+        "SELECT nome_torneo, data_torneo FROM locandine WHERE id = ?", (lid,)
+    ).fetchone()
+    vecchio = conn.execute(
+        "SELECT nome FROM tornei WHERE chiuso = 0 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.execute("UPDATE tornei SET chiuso = 1 WHERE chiuso = 0")
+    conn.execute(
+        "INSERT INTO tornei (nome, creato_il, chiuso, data_torneo) VALUES (?, ?, 0, ?)",
+        (nome_nuovo, datetime.now().isoformat(), data_nuovo),
+    )
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES ('aperte', '1') "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = '1'"
+    )
+    conn.commit()
+    return (f"🏆 Archiviato '{vecchio[0]}', aperto '{nome_nuovo}' con iscrizioni aperte."
+            if vecchio else f"🏆 Aperto '{nome_nuovo}' con iscrizioni aperte.")
+
+
 def _gruppo(conn):
     row = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (_chiave_gruppo,)).fetchone()
     return int(row[0]) if row else None
@@ -186,8 +259,9 @@ async def locandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = _conn()
     didascalia = _didascalia(dati)
     cur = conn.execute(
-        "INSERT INTO locandine (didascalia, stato, creato_il) VALUES (?, 'bozza', ?)",
-        (didascalia, datetime.now(FUSO).isoformat()),
+        "INSERT INTO locandine (didascalia, stato, creato_il, nome_torneo, data_torneo, nuovo_torneo) "
+        "VALUES (?, 'bozza', ?, ?, ?, 1)",
+        (didascalia, datetime.now(FUSO).isoformat(), _nome_torneo(conn, dati), dati["data"].isoformat()),
     )
     conn.commit()
     lid = cur.lastrowid
@@ -205,11 +279,14 @@ LIMITE_DIDASCALIA = 1024  # limite Telegram per la didascalia di una foto
 
 
 def _tastiera(lid: int):
+    flag = _conn().execute("SELECT nuovo_torneo FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
+    interruttore = "🏆 Nuovo torneo: SÌ (tocca per NO)" if flag else "🔁 Nuovo torneo: NO (tocca per SÌ)"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Pubblica ora", callback_data=f"loc:ora:{lid}"),
          InlineKeyboardButton("⏰ Programma", callback_data=f"loc:prog:{lid}")],
         [InlineKeyboardButton("✏️ Aggiungi testo", callback_data=f"loc:testo:{lid}"),
          InlineKeyboardButton("❌ Annulla", callback_data=f"loc:no:{lid}")],
+        [InlineKeyboardButton(interruttore, callback_data=f"loc:torneo:{lid}")],
     ])
 
 
@@ -218,7 +295,8 @@ def _testo_completo(didascalia: str, extra: str | None) -> str:
 
 
 def _caption_anteprima(lid: int, testo: str) -> str:
-    return f"Anteprima n° {lid}\n\nDidascalia nel gruppo:\n{testo}"
+    _, piano = _piano_torneo(_conn(), lid)
+    return f"Anteprima n° {lid}\n\nDidascalia nel gruppo:\n{testo}\n\n{piano}"
 
 
 async def _pubblica(bot, lid: int) -> str:
@@ -235,10 +313,16 @@ async def _pubblica(bot, lid: int) -> str:
     gruppo = _gruppo(conn)
     if gruppo is None:
         return "Nessun gruppo registrato: manda /registragruppo dentro il gruppo del circolo."
-    await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
+    # prima il cambio torneo, così chi vede la locandina si iscrive già a quello nuovo
+    esito_torneo = _cambia_torneo(conn, lid)
+    try:
+        await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
+    except Exception as e:
+        return (f"❌ Locandina n° {lid} NON pubblicata: errore Telegram ({e})."
+                + (f"\n{esito_torneo}" if esito_torneo else ""))
     conn.execute("UPDATE locandine SET stato = 'pubblicata' WHERE id = ?", (lid,))
     conn.commit()
-    return f"✅ Locandina n° {lid} pubblicata nel gruppo."
+    return f"✅ Locandina n° {lid} pubblicata nel gruppo." + (f"\n{esito_torneo}" if esito_torneo else "")
 
 
 async def _job_pubblica(context: ContextTypes.DEFAULT_TYPE):
@@ -282,6 +366,20 @@ async def bottoni(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Scrivi il testo da aggiungere sotto la didascalia (anche su più righe).\n"
             "Se lo riscrivi, sostituisce quello aggiunto prima.\n"
             "'nessuno' toglie il testo aggiunto, 'annulla' lascia tutto com'è."
+        )
+    elif azione == "torneo":
+        conn = _conn()
+        row = conn.execute(
+            "SELECT didascalia, extra, stato FROM locandine WHERE id = ?", (lid,)
+        ).fetchone()
+        if not row or row[2] in ("pubblicata", "annullata"):
+            await q.message.reply_text("Questa locandina non è più modificabile.")
+            return
+        conn.execute("UPDATE locandine SET nuovo_torneo = 1 - nuovo_torneo WHERE id = ?", (lid,))
+        conn.commit()
+        await q.edit_message_caption(
+            caption=_caption_anteprima(lid, _testo_completo(row[0], row[1])),
+            reply_markup=_tastiera(lid),
         )
     elif azione == "no":
         conn = _conn()
