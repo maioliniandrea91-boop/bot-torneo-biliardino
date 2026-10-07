@@ -141,9 +141,13 @@ def testo_data(d: date, ora: str) -> str:
 
 def genera_locandina(d: date, formula, ora="21:30", quota="20€", premi="BV") -> bytes:
     """formula: chiave di FORMULE oppure lista di righe già pronte."""
-    righe_formula = FORMULE.get(formula, None) if isinstance(formula, str) else list(formula)
-    if righe_formula is None:
-        righe_formula = [formula.upper()]
+    # formula: una chiave ("volo") o una lista di chiavi (["volo", "tradizionale"])
+    chiavi = [formula] if isinstance(formula, str) else list(formula)
+    if len(chiavi) == 1:
+        righe_formula = FORMULE.get(chiavi[0], [chiavi[0].upper()])
+    else:
+        # più formule: le righe di ciascuna, una sotto l'altra
+        righe_formula = [r for k in chiavi for r in FORMULE.get(k, [k.upper()])]
 
     img = Image.new("RGBA", (W, H), SFONDO + (255,))
     draw = ImageDraw.Draw(img)
@@ -188,9 +192,12 @@ def genera_locandina(d: date, formula, ora="21:30", quota="20€", premi="BV") -
     f_box = _font(FONT_TITOLI, 72)
     _box(img, (70, 672, 522, 798), BORDO_A, [f"{quota} COPPIA".upper()], f_box, 1.0, pad_top=32)
     _box(img, (70, 824, 522, 950), BORDO_B, [f"PREMI IN {premi}".upper()], f_box, 1.0, pad_top=32)
-    f_formula = _font(FONT_TITOLI, 108 if len(righe_formula) > 1 else 124)
-    while max(_larghezza(r, f_formula) for r in righe_formula) > 452 - 40 and f_formula.size > 60:
-        f_formula = _font(FONT_TITOLI, f_formula.size - 4)
+    # corpo massimo che sta nel box sia in altezza sia in larghezza
+    n = len(righe_formula)
+    corpo = min(124 if n == 1 else 108, int((278 - 40) / (n * 0.95)))
+    f_formula = _font(FONT_TITOLI, corpo)
+    while max(_larghezza(r, f_formula) for r in righe_formula) > 452 - 40 and f_formula.size > 40:
+        f_formula = _font(FONT_TITOLI, f_formula.size - 2)
     _box(img, (558, 672, 1010, 950), BORDO_C, righe_formula, f_formula, 0.95)
 
     # Info e prenotazioni

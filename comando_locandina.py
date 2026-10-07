@@ -4,6 +4,7 @@ e la pubblica nel gruppo subito o all'orario che scegli tu.
 
 FLUSSO (solo admin, in chat privata col bot):
   /locandina 16/10 volo                 -> data + formula (obbligatori)
+  /locandina 16/10 volo tradizionale    -> più formule insieme (anche tutte e 3)
   /locandina 16/10 rollerball 22:00 25€ -> ora e quota opzionali
   /locandina 16/10 tradizionale premi COPPE -> "premi ..." sempre in fondo
 Il bot risponde con l'anteprima e quattro bottoni:
@@ -105,12 +106,16 @@ def leggi_argomenti(args: list[str]):
     except ValueError:
         return None, f"La data '{args[0]}' non esiste."
 
-    ora, quota, premi, formula = ORA_DEFAULT, QUOTA_DEFAULT, PREMI_DEFAULT, None
+    ora, quota, premi = ORA_DEFAULT, QUOTA_DEFAULT, PREMI_DEFAULT
+    formule = []  # una o più, nell'ordine in cui le scrivi
     resto = args[1:]
     if any(t.lower() == "premi" for t in resto):
         i = [t.lower() for t in resto].index("premi")
         premi = " ".join(resto[i + 1:]).strip().upper() or PREMI_DEFAULT
         resto = resto[:i]
+
+    # "volo+tradizionale" o "volo,tradizionale" valgono come parole separate
+    resto = [p for t in resto for p in re.split(r"[+,]", t) if p]
 
     for t in resto:
         tl = t.lower()
@@ -121,16 +126,18 @@ def leggi_argomenti(args: list[str]):
             ora = f"{int(h):02d}:{mi}"
         elif re.fullmatch(r"\d+(?:[.,]\d+)?(?:€|euro)", tl):
             quota = re.sub(r"(?:€|euro)$", "", tl) + "€"
-        elif tl in FORMULE:
-            formula = tl
-        elif tl in ("3", "tocchi"):
-            formula = "rollerball"
+        elif tl in FORMULE or tl in ("3", "tocchi"):
+            chiave = "rollerball" if tl in ("3", "tocchi", "3tocchi") else tl
+            if chiave not in formule:
+                formule.append(chiave)
+        elif tl in ("e", "&"):
+            continue
         else:
             return None, f"Non capisco '{t}'."
 
-    if formula is None:
-        return None, "Manca la formula: scrivi rollerball, volo o tradizionale."
-    return {"data": d, "formula": formula, "ora": ora, "quota": quota, "premi": premi}, None
+    if not formule:
+        return None, "Manca la formula: scrivi rollerball, volo o tradizionale (anche più di una)."
+    return {"data": d, "formula": formule, "ora": ora, "quota": quota, "premi": premi}, None
 
 
 def leggi_quando(testo: str):
@@ -167,7 +174,7 @@ def _didascalia(dati) -> str:
 def _nome_torneo(conn, dati) -> str:
     """'16/10 Rollerball'; se il nome esiste già nello storico aggiunge l'anno."""
     d = dati["data"]
-    formula = dati["formula"].capitalize()
+    formula = "-".join(f.capitalize() for f in dati["formula"])
     nome = f"{d.day:02d}/{d.month:02d} {formula}"
     if conn.execute("SELECT 1 FROM tornei WHERE LOWER(nome) = LOWER(?)", (nome,)).fetchone():
         nome = f"{d.day:02d}/{d.month:02d}/{d.year % 100:02d} {formula}"
@@ -248,7 +255,7 @@ async def locandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (errore + "\n\n" if errore else "")
             + "Uso: /locandina 16/10 volo\n"
             "Opzionali: ora (22:00), quota (25€), premi in fondo (premi COPPE)\n"
-            "Formule: rollerball, volo, tradizionale\n"
+            "Formule: rollerball, volo, tradizionale — anche più di una: /locandina 16/10 volo tradizionale\n"
             f"Se non li scrivi: ore {ORA_DEFAULT}, {QUOTA_DEFAULT} a coppia, premi in {PREMI_DEFAULT}."
         )
         return
