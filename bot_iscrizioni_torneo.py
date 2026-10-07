@@ -939,7 +939,7 @@ def main():
     app.add_handler(CommandHandler("anteprimasondaggio", anteprimasondaggio))
     app.add_handler(CommandHandler("modificasondaggio", modificasondaggio))
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
-    comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS)
+    comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS, MAX_SQUADRE)
 
     app.job_queue.run_daily(
         sondaggio_automatico,
