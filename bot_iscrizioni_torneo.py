@@ -50,6 +50,7 @@ nota in fondo al file.
 import io
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -207,6 +208,27 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     return testo
 
 
+SEPARATORI_COPPIA = re.compile(r"\s+(?:e|ed)\s+|\s*[-/&+,]\s*", re.IGNORECASE)
+
+
+def normalizza_nome_squadra(testo: str) -> str:
+    """Le squadre sono sempre coppie: porta tutto al formato 'Nome1-Nome2'.
+    'antonio e eva', 'Antonio/Eva', 'Antonio Eva' -> 'Antonio-Eva'.
+    Se non si riesce a riconoscere con certezza due nomi, lascia com'è."""
+    pulito = " ".join(testo.split())
+    parti = [p for p in SEPARATORI_COPPIA.split(pulito) if p]
+    if len(parti) != 2:
+        parole = pulito.split(" ")
+        if len(parole) != 2:
+            return pulito  # caso ambiguo: lo sistemi tu con /rinomina
+        parti = parole
+
+    def maiuscola(nome: str) -> str:
+        return " ".join(w[:1].upper() + w[1:] for w in nome.split(" "))
+
+    return "-".join(maiuscola(p.strip()) for p in parti)
+
+
 async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     user = update.effective_user
@@ -220,7 +242,8 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso corretto: /iscrivi NomeSquadra")
         return
 
-    nome_squadra = " ".join(context.args).strip()
+    nome_scritto = " ".join(context.args).strip()
+    nome_squadra = normalizza_nome_squadra(nome_scritto)
 
     # Il limite di 1 squadra per persona vale solo per gli utenti normali,
     # e solo all'interno del torneo attivo corrente.
