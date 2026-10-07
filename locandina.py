@@ -40,8 +40,8 @@ MESI = ["GENNAIO", "FEBBRAIO", "MARZO", "APRILE", "MAGGIO", "GIUGNO", "LUGLIO",
 
 # Formule note: chiave scritta nel comando -> righe mostrate nel box grande
 FORMULE = {
-    "rollerball": ["3 TOCCHI", "ROLLERBALL"],
-    "3tocchi": ["3 TOCCHI", "ROLLERBALL"],
+    "rollerball": ["ROLLERBALL"],   # "3 tocchi" va eventualmente in didascalia
+    "3tocchi": ["ROLLERBALL"],
     "volo": ["VOLO"],
     "tradizionale": ["TRADIZIONALE"],
 }
