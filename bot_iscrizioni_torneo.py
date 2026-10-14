@@ -263,25 +263,16 @@ async def rispondi(update: Update, context: ContextTypes.DEFAULT_TYPE, testo: st
         )
 
 
-async def pubblica_lista(update: Update, context: ContextTypes.DEFAULT_TYPE, conn,
-                         torneo_id: int, nome_torneo: str, intestazione: str = ""):
-    """Invia la lista aggiornata e cancella la precedente: nel gruppo resta
-    sempre UNA sola lista. Prima invia la nuova, poi toglie la vecchia
+async def sostituisci_lista(bot, conn, chat_id: int, testo: str):
+    """Invia la lista aggiornata e cancella la precedente in quella chat:
+    resta sempre UNA sola lista. Prima invia la nuova, poi toglie la vecchia
     (se qualcosa va storto, la lista non sparisce mai del tutto)."""
-    chat_id = update.effective_chat.id
-    testo = testo_squadre(conn, torneo_id, nome_torneo)
-    if intestazione:
-        testo = f"{intestazione}\n\n{testo}"
-    nuovo = await context.bot.send_message(chat_id=chat_id, text=testo)
-
-    if not in_gruppo(update):
-        return
-    await cancella_comando(update)
+    nuovo = await bot.send_message(chat_id=chat_id, text=testo)
     chiave = f"lista_msg_{chat_id}"
     row = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (chiave,)).fetchone()
     if row:
         try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=int(row[0]))
+            await bot.delete_message(chat_id=chat_id, message_id=int(row[0]))
         except Exception:
             pass  # già cancellata a mano o troppo vecchia (>48h): pazienza
     conn.execute(
@@ -290,6 +281,29 @@ async def pubblica_lista(update: Update, context: ContextTypes.DEFAULT_TYPE, con
         (chiave, str(nuovo.message_id)),
     )
     conn.commit()
+
+
+async def pubblica_lista(update: Update, context: ContextTypes.DEFAULT_TYPE, conn,
+                         torneo_id: int, nome_torneo: str, intestazione: str = ""):
+    """Lista dopo un comando: nel gruppo sostituisce la precedente e cancella
+    il comando dell'utente; in privato risponde e basta."""
+    testo = testo_squadre(conn, torneo_id, nome_torneo)
+    if intestazione:
+        testo = f"{intestazione}\n\n{testo}"
+    if not in_gruppo(update):
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=testo)
+        return
+    await sostituisci_lista(context.bot, conn, update.effective_chat.id, testo)
+    await cancella_comando(update)
+
+
+async def ripubblica_lista_gruppo(bot, conn, chat_id: int):
+    """Chiamata dalla ripubblicazione della locandina: rimette la lista sotto
+    la locandina, togliendo la precedente. Se non c'è nessuna iscritta, salta."""
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    n = conn.execute("SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_id,)).fetchone()[0]
+    if n:
+        await sostituisci_lista(bot, conn, chat_id, testo_squadre(conn, torneo_id, nome_torneo))
 
 
 SEPARATORI_COPPIA = re.compile(r"\s+(?:e|ed)\s+|\s*[-/&+,]\s*", re.IGNORECASE)
@@ -1080,7 +1094,8 @@ def main():
     app.add_handler(CommandHandler("anteprimasondaggio", anteprimasondaggio))
     app.add_handler(CommandHandler("modificasondaggio", modificasondaggio))
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
-    comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS, MAX_SQUADRE)
+    comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS, MAX_SQUADRE,
+                               ripubblica_lista=ripubblica_lista_gruppo)
 
     app.job_queue.run_daily(
         sondaggio_automatico,

@@ -59,6 +59,7 @@ _is_admin = None
 _chiave_gruppo = None
 _admin_ids = set()
 _max_squadre = 18
+_ripubblica_lista = None
 
 
 def _crea_tabella(conn):
@@ -470,6 +471,11 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
             pass  # già cancellato a mano o troppo vecchio: pazienza
     conn.execute("UPDATE locandine SET msg_gruppo = ? WHERE id = ?", (nuovo.message_id, lid))
     conn.commit()
+    if _ripubblica_lista:  # lista squadre subito sotto la locandina, la vecchia sparisce
+        try:
+            await _ripubblica_lista(bot, conn, gruppo)
+        except Exception:
+            pass
     prossimo = adesso + INTERVALLO_REPOST
     if prossimo < inizio:
         _programma_repost(conn, jq, lid, prossimo)
@@ -759,9 +765,11 @@ async def ripristina_programmate(application):
         _programma_repost(conn, application.job_queue, lid, quando)
 
 
-def registra(app, db_connect, is_admin, chiave_gruppo, admin_ids, max_squadre=18):
+def registra(app, db_connect, is_admin, chiave_gruppo, admin_ids, max_squadre=18,
+             ripubblica_lista=None):
     """Collega il comando al bot. Va chiamata da main() del file principale."""
-    global _db_connect, _is_admin, _chiave_gruppo, _admin_ids, _max_squadre
+    global _db_connect, _is_admin, _chiave_gruppo, _admin_ids, _max_squadre, _ripubblica_lista
+    _ripubblica_lista = ripubblica_lista
     _db_connect, _is_admin, _chiave_gruppo, _admin_ids = db_connect, is_admin, chiave_gruppo, set(admin_ids)
     _max_squadre = max_squadre
     app.add_handler(CommandHandler("locandina", locandina))
