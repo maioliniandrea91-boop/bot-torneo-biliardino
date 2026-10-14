@@ -390,10 +390,22 @@ def _avvia_repost(conn, job_queue, lid: int):
     _programma_repost(conn, job_queue, lid, prossimo)
 
 
-def _riga_posti(iscritte: int) -> str:
+CHIAVE_SOGLIA = "soglia_conferma"
+SOGLIA_DEFAULT = 8  # coppie minime per confermare il torneo (modificabile con /soglia)
+
+
+def get_soglia(conn) -> int:
+    row = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_SOGLIA,)).fetchone()
+    return int(row[0]) if row else SOGLIA_DEFAULT
+
+
+def _riga_posti(iscritte: int, conn=None) -> str:
     restano = max(0, _max_squadre - iscritte)
     posti = "resta 1 posto" if restano == 1 else f"restano {restano} posti"
-    return f"📋 Iscritte {iscritte}/{_max_squadre} — {posti}"
+    riga = f"📋 Iscritte {iscritte}/{_max_squadre} — {posti}"
+    if conn is not None and iscritte >= get_soglia(conn):
+        riga += "\n✅ Torneo confermato"
+    return riga
 
 
 async def _avvisa_admin(bot, testo: str):
@@ -443,7 +455,7 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
         _ferma_repost(conn, jq, lid)
         await _avvisa_admin(bot, "🔁 Ripubblicazione fermata: nessun gruppo registrato (/registragruppo).")
         return
-    didascalia = f"{_testo_completo(didascalia, extra)}\n\n{_riga_posti(iscritte)}"
+    didascalia = f"{_testo_completo(didascalia, extra)}\n\n{_riga_posti(iscritte, conn)}"
     try:
         nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
     except Exception as e:

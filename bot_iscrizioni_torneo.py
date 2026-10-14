@@ -98,6 +98,7 @@ COMANDI = [
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
     ("rinomina", "[admin] Corregge il nome di una squadra — /rinomina 3 | Antonio-Eva (3 = numero in /squadre)"),
     ("eliminatorneo", "[admin] Elimina per sempre un torneo archiviato dallo storico"),
+    ("soglia", "[admin] Coppie minime per confermare il torneo — /soglia 8"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
     ("esporta", "[admin] Invia l'elenco squadre in Word (solo nomi) in privato"),
@@ -205,7 +206,23 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     for i, (nome,) in enumerate(righe, start=1):
         testo += f"{i}. {nome}\n"
     testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
+    testo += f"\n\n{riga_conferma(conn, len(righe))}"
     return testo
+
+
+def riga_conferma(conn, iscritte: int) -> str:
+    """Stato del torneo, sempre in fondo alla lista squadre."""
+    soglia = comando_locandina.get_soglia(conn)
+    if iscritte < soglia:
+        mancano = soglia - iscritte
+        manca = "manca 1 coppia" if mancano == 1 else f"mancano {mancano} coppie"
+        return f"⏳ Torneo da confermare: {manca} (si conferma a {soglia})"
+    restano = MAX_SQUADRE - iscritte
+    if restano <= 0:
+        return f"✅ Torneo confermato! Raggiunte {soglia} coppie. Torneo al completo."
+    posti = "c'è ancora 1 posto" if restano == 1 else f"ci sono ancora {restano} posti"
+    return (f"✅ Torneo confermato! Raggiunte {soglia} coppie. "
+            f"{posti[0].upper() + posti[1:]}, iscrivetevi con /iscrivi Nome1-Nome2")
 
 
 # --- Chat pulita: una sola lista "viva" per gruppo ---
@@ -687,6 +704,29 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=update.effective_chat.id, text=caption)
 
 
+async def soglia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando admin: coppie minime per confermare il torneo."""
+    if not is_admin(update.effective_user.id):
+        await rispondi(update, context, "Comando riservato agli admin.")
+        return
+    conn = db_connect()
+    attuale = comando_locandina.get_soglia(conn)
+    if not context.args:
+        await rispondi(update, context, f"Soglia attuale: {attuale} coppie. Per cambiarla: /soglia N")
+        return
+    if not context.args[0].isdigit() or not 2 <= int(context.args[0]) <= MAX_SQUADRE:
+        await rispondi(update, context, f"Scrivi un numero tra 2 e {MAX_SQUADRE}. Es. /soglia 8")
+        return
+    nuova = int(context.args[0])
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES (?, ?) "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore",
+        (comando_locandina.CHIAVE_SOGLIA, str(nuova)),
+    )
+    conn.commit()
+    await rispondi(update, context, f"✅ Soglia di conferma: {attuale} → {nuova} coppie.")
+
+
 async def chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Comando riservato agli admin.")
@@ -994,6 +1034,7 @@ def main():
     app.add_handler(CommandHandler("torneo", torneo))
     app.add_handler(CommandHandler("storico", storico))
     app.add_handler(CommandHandler("podio", podio))
+    app.add_handler(CommandHandler("soglia", soglia))
     app.add_handler(CommandHandler("chiudi", chiudi))
     app.add_handler(CommandHandler("apri", apri))
     app.add_handler(CommandHandler("esporta", esporta))
