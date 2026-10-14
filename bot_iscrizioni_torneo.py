@@ -58,7 +58,7 @@ from zoneinfo import ZoneInfo
 from docx import Document
 
 import comando_locandina
-from telegram import BotCommand, BotCommandScopeChatAdministrators, Update
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeChatAdministrators, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -206,17 +206,17 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     for i, (nome,) in enumerate(righe, start=1):
         testo += f"{i}. {nome}\n"
     testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
-    testo += f"\n\n{riga_conferma(conn, len(righe))}"
+    stato_torneo = riga_conferma(conn, len(righe))
+    if stato_torneo:
+        testo += f"\n\n{stato_torneo}"
     return testo
 
 
 def riga_conferma(conn, iscritte: int) -> str:
-    """Stato del torneo, sempre in fondo alla lista squadre."""
+    """Riga di conferma in fondo alla lista squadre, solo a soglia raggiunta."""
     soglia = comando_locandina.get_soglia(conn)
     if iscritte < soglia:
-        mancano = soglia - iscritte
-        manca = "manca 1 coppia" if mancano == 1 else f"mancano {mancano} coppie"
-        return f"⏳ Torneo da confermare: {manca} (si conferma a {soglia})"
+        return ""
     restano = MAX_SQUADRE - iscritte
     if restano <= 0:
         return f"✅ Torneo confermato! Raggiunte {soglia} coppie. Torneo al completo."
@@ -996,7 +996,7 @@ async def imposta_menu_per_gruppo(update: Update, context: ContextTypes.DEFAULT_
         return
 
     conn = db_connect()
-    chiave = f"menu_admin_impostato_{chat.id}"
+    chiave = f"menu_admin_impostato_{chat.id}_{versione_menu()}"  # cambia se cambiano i comandi
     gia_impostato = conn.execute(
         "SELECT 1 FROM stato WHERE chiave = ?", (chiave,)
     ).fetchone()
@@ -1015,8 +1015,43 @@ async def imposta_menu_per_gruppo(update: Update, context: ContextTypes.DEFAULT_
     conn.commit()
 
 
+def versione_menu() -> str:
+    import hashlib
+    return hashlib.md5(json.dumps(COMANDI).encode()).hexdigest()[:8]
+
+
+async def aggiorna_menu_admin(application):
+    """All'avvio dà il menu completo: agli admin in chat privata col bot e
+    agli amministratori dei gruppi già noti (così i comandi nuovi compaiono
+    subito, senza aspettare)."""
+    comandi_completi = [BotCommand(n, d[:256]) for n, d in COMANDI]
+    for admin_id in ADMIN_IDS:
+        try:
+            await application.bot.set_my_commands(comandi_completi, scope=BotCommandScopeChat(admin_id))
+        except Exception:
+            pass  # admin che non ha mai avviato il bot in privato
+    conn = db_connect()
+    gruppi = {int(r[0]) for r in conn.execute(
+        "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_CHAT_GIOCO_LIBERO,))}
+    gruppi |= {int(r[0].split("_")[3]) for r in conn.execute(
+        "SELECT chiave FROM stato WHERE chiave LIKE 'menu_admin_impostato_%'")}
+    for gid in gruppi:
+        try:
+            await application.bot.set_my_commands(
+                comandi_completi, scope=BotCommandScopeChatAdministrators(gid))
+            conn.execute(
+                "INSERT INTO stato (chiave, valore) VALUES (?, '1') "
+                "ON CONFLICT(chiave) DO UPDATE SET valore = '1'",
+                (f"menu_admin_impostato_{gid}_{versione_menu()}",),
+            )
+        except Exception:
+            pass
+    conn.commit()
+
+
 async def all_avvio(application):
     await imposta_menu_comandi(application)
+    await aggiorna_menu_admin(application)
     await comando_locandina.ripristina_programmate(application)
 
 
