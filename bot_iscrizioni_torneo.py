@@ -208,6 +208,73 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     return testo
 
 
+# --- Chat pulita: una sola lista "viva" per gruppo ---
+SECONDI_MSG_TEMPORANEI = 20  # avvisi/errori nel gruppo spariscono dopo 20 s
+
+
+def in_gruppo(update: Update) -> bool:
+    return update.effective_chat.type in ("group", "supergroup")
+
+
+async def cancella_comando(update: Update):
+    """Nel gruppo cancella il messaggio con cui l'utente ha lanciato il comando.
+    Serve che il bot sia admin del gruppo col permesso 'Elimina messaggi'."""
+    if in_gruppo(update):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass  # permesso mancante o messaggio già cancellato
+
+
+async def _elimina_job(context: ContextTypes.DEFAULT_TYPE):
+    chat_id, msg_id = context.job.data
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+    except Exception:
+        pass
+
+
+async def rispondi(update: Update, context: ContextTypes.DEFAULT_TYPE, testo: str):
+    """Risposta breve (errori, avvisi): in privato resta, nel gruppo sparisce
+    da sola dopo SECONDI_MSG_TEMPORANEI insieme al comando dell'utente."""
+    chat_id = update.effective_chat.id
+    msg = await context.bot.send_message(chat_id=chat_id, text=testo)
+    if in_gruppo(update):
+        await cancella_comando(update)
+        context.job_queue.run_once(
+            _elimina_job, SECONDI_MSG_TEMPORANEI, data=(chat_id, msg.message_id)
+        )
+
+
+async def pubblica_lista(update: Update, context: ContextTypes.DEFAULT_TYPE, conn,
+                         torneo_id: int, nome_torneo: str, intestazione: str = ""):
+    """Invia la lista aggiornata e cancella la precedente: nel gruppo resta
+    sempre UNA sola lista. Prima invia la nuova, poi toglie la vecchia
+    (se qualcosa va storto, la lista non sparisce mai del tutto)."""
+    chat_id = update.effective_chat.id
+    testo = testo_squadre(conn, torneo_id, nome_torneo)
+    if intestazione:
+        testo = f"{intestazione}\n\n{testo}"
+    nuovo = await context.bot.send_message(chat_id=chat_id, text=testo)
+
+    if not in_gruppo(update):
+        return
+    await cancella_comando(update)
+    chiave = f"lista_msg_{chat_id}"
+    row = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (chiave,)).fetchone()
+    if row:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=int(row[0]))
+        except Exception:
+            pass  # già cancellata a mano o troppo vecchia (>48h): pazienza
+    conn.execute(
+        "INSERT INTO stato (chiave, valore) VALUES (?, ?) "
+        "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore",
+        (chiave, str(nuovo.message_id)),
+    )
+    conn.commit()
+
+
 SEPARATORI_COPPIA = re.compile(r"\s+(?:e|ed)\s+|\s*[-/&+,]\s*", re.IGNORECASE)
 
 
@@ -235,11 +302,11 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     torneo_id, nome_torneo = get_torneo_attivo(conn)
 
     if not iscrizioni_aperte(conn):
-        await update.message.reply_text("Le iscrizioni sono chiuse. Contatta un admin.")
+        await rispondi(update, context, "Le iscrizioni sono chiuse. Contatta un admin.")
         return
 
     if not context.args:
-        await update.message.reply_text("Uso corretto: /iscrivi NomeSquadra")
+        await rispondi(update, context, "Uso corretto: /iscrivi NomeSquadra")
         return
 
     nome_scritto = " ".join(context.args).strip()
@@ -253,7 +320,7 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             (user.id, torneo_id),
         ).fetchone()
         if esistente:
-            await update.message.reply_text(
+            await rispondi(update, context, 
                 f"Sei già iscritto come '{esistente[0]}'. Usa /ritira prima di reiscriverti."
             )
             return
@@ -263,7 +330,7 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (torneo_id, nome_squadra),
     ).fetchone()
     if duplicato:
-        await update.message.reply_text(
+        await rispondi(update, context, 
             f"Il nome '{nome_squadra}' è già stato preso in questo torneo. Scegline un altro."
         )
         return
@@ -272,7 +339,7 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_id,)
     ).fetchone()[0]
     if totale_attuale >= MAX_SQUADRE:
-        await update.message.reply_text(
+        await rispondi(update, context, 
             f"Torneo al completo: raggiunto il limite di {MAX_SQUADRE} coppie. "
             "Contatta un admin se vuoi essere messo in lista d'attesa."
         )
@@ -285,30 +352,27 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     conn.commit()
 
-    totale = totale_attuale + 1
-    await update.message.reply_text(
-        f"✅ Squadra '{nome_squadra}' iscritta a {nome_torneo}! (n° {totale} nell'elenco)"
-    )
-    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
+    await pubblica_lista(update, context, conn, torneo_id, nome_torneo,
+                         f"✅ Iscritta: {nome_squadra}")
 
 
 async def squadre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     torneo_id, nome_torneo = get_torneo_attivo(conn)
-    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
+    await pubblica_lista(update, context, conn, torneo_id, nome_torneo)
 
 
 async def ritira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
     user = update.effective_user
-    torneo_id, _ = get_torneo_attivo(conn)
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
     proprie = conn.execute(
         "SELECT id, nome_squadra FROM squadre WHERE user_id = ? AND torneo_id = ?",
         (user.id, torneo_id),
     ).fetchall()
 
     if not proprie:
-        await update.message.reply_text("Non risulti iscritto a nessuna squadra in questo torneo.")
+        await rispondi(update, context, "Non risulti iscritto a nessuna squadra in questo torneo.")
         return
 
     nome_indicato = " ".join(context.args).strip() if context.args else None
@@ -319,21 +383,22 @@ async def ritira(update: Update, context: ContextTypes.DEFAULT_TYPE):
         match = next((p for p in proprie if p[1].lower() == nome_indicato.lower()), None)
         if not match:
             elenco = ", ".join(n for _, n in proprie)
-            await update.message.reply_text(
+            await rispondi(update, context, 
                 f"Non trovo '{nome_indicato}' tra le tue squadre. Le tue: {elenco}"
             )
             return
         squadra_id, nome = match
     else:
         elenco = ", ".join(n for _, n in proprie)
-        await update.message.reply_text(
+        await rispondi(update, context, 
             f"Hai più squadre iscritte. Specifica quale: /ritira NomeSquadra\nLe tue: {elenco}"
         )
         return
 
     conn.execute("DELETE FROM squadre WHERE id = ?", (squadra_id,))
     conn.commit()
-    await update.message.reply_text(f"Iscrizione di '{nome}' annullata.")
+    await pubblica_lista(update, context, conn, torneo_id, nome_torneo,
+                         f"↩️ Ritirata: {nome}")
 
 
 async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,10 +406,10 @@ async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     indipendentemente da chi l'ha iscritta. Diverso da /ritira, che è
     self-service e tocca solo le proprie squadre."""
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Comando riservato agli admin.")
+        await rispondi(update, context, "Comando riservato agli admin.")
         return
     if not context.args:
-        await update.message.reply_text("Uso corretto: /rimuovi NomeSquadra")
+        await rispondi(update, context, "Uso corretto: /rimuovi NomeSquadra")
         return
 
     conn = db_connect()
@@ -357,7 +422,7 @@ async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
 
     if not match:
-        await update.message.reply_text(
+        await rispondi(update, context, 
             f"Nessuna squadra '{nome_cercato}' trovata in {nome_torneo}. Controlla /squadre."
         )
         return
@@ -366,8 +431,8 @@ async def rimuovi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.execute("DELETE FROM squadre WHERE id = ?", (squadra_id,))
     conn.commit()
 
-    await update.message.reply_text(f"🗑️ Squadra '{nome_reale}' rimossa da {nome_torneo}.")
-    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
+    await pubblica_lista(update, context, conn, torneo_id, nome_torneo,
+                         f"🗑️ Rimossa: {nome_reale}")
 
 
 async def rinomina(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -377,13 +442,13 @@ async def rinomina(update: Update, context: ContextTypes.DEFAULT_TYPE):
       /rinomina 3 | Antonio-Eva
       /rinomina Antonio e Eva | Antonio-Eva"""
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Comando riservato agli admin.")
+        await rispondi(update, context, "Comando riservato agli admin.")
         return
 
     testo_args = " ".join(context.args) if context.args else ""
     parti = [p.strip() for p in testo_args.split("|")]
     if len(parti) != 2 or not parti[0] or not parti[1]:
-        await update.message.reply_text(
+        await rispondi(update, context, 
             "Uso: /rinomina NUMERO | Nuovo nome  (il numero è quello in /squadre)\n"
             "oppure: /rinomina Nome attuale | Nuovo nome\n"
             "Es. /rinomina 3 | Antonio-Eva"
@@ -401,26 +466,26 @@ async def rinomina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if vecchio.isdigit():
         pos = int(vecchio)
         if not 1 <= pos <= len(righe):
-            await update.message.reply_text(f"Non c'è una squadra n° {pos}. Controlla /squadre.")
+            await rispondi(update, context, f"Non c'è una squadra n° {pos}. Controlla /squadre.")
             return
         squadra_id, nome_reale = righe[pos - 1]
     else:
         match = next((r for r in righe if r[1].lower() == vecchio.lower()), None)
         if not match:
-            await update.message.reply_text(
+            await rispondi(update, context, 
                 f"Nessuna squadra '{vecchio}' in {nome_torneo}. Usa il numero da /squadre."
             )
             return
         squadra_id, nome_reale = match
 
     if any(r[1].lower() == nuovo.lower() and r[0] != squadra_id for r in righe):
-        await update.message.reply_text(f"Il nome '{nuovo}' è già usato da un'altra squadra.")
+        await rispondi(update, context, f"Il nome '{nuovo}' è già usato da un'altra squadra.")
         return
 
     conn.execute("UPDATE squadre SET nome_squadra = ? WHERE id = ?", (nuovo, squadra_id))
     conn.commit()
-    await update.message.reply_text(f"✏️ '{nome_reale}' → '{nuovo}'")
-    await update.message.reply_text(testo_squadre(conn, torneo_id, nome_torneo))
+    await pubblica_lista(update, context, conn, torneo_id, nome_torneo,
+                         f"✏️ {nome_reale} → {nuovo}")
 
 
 async def eliminatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
