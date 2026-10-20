@@ -24,9 +24,11 @@ COSA FA:
                             (squadre incluse, restano consultabili in /storico)
 - /storico                -> mostra gli ultimi 10 tornei con conteggio squadre
 - /storico Nome           -> mostra le squadre e il podio di un torneo passato
-- /podio Sq1 | Sq2 | Sq3  -> (solo admin) registra e annuncia il podio del
-                            torneo attivo nel gruppo. Se usato in risposta a
-                            una foto, la ripubblica come immagine del podio.
+- /podio Sq1 | Sq2 | Sq3 | descrizione -> (solo admin) registra e annuncia il
+                            podio del torneo attivo nel gruppo; la descrizione
+                            (facoltativa) va sotto il podio, non nello storico.
+                            Con foto: comando nella didascalia della foto,
+                            oppure in risposta alla foto.
 - /chiudi                -> (solo admin) blocca nuove iscrizioni
 - /apri                  -> (solo admin) riapre le iscrizioni
 - /esporta               -> (solo admin) invia elenco squadre in Word (solo nomi) in privato
@@ -93,7 +95,7 @@ COMANDI = [
     ("torneo", "Mostra il nome del torneo attualmente attivo"),
     ("storico", "Mostra gli ultimi tornei, o i dettagli di uno (/storico Nome)"),
     ("help", "Mostra questa lista di comandi"),
-    ("podio", "[admin] Registra e annuncia il podio — /podio Sq1 | Sq2 | Sq3"),
+    ("podio", "[admin] Annuncia il podio — /podio Sq1 | Sq2 | Sq3 | descrizione (facoltativa)"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
     ("rinomina", "[admin] Corregge il nome di una squadra — /rinomina 3 | Antonio-Eva (3 = numero in /squadre)"),
@@ -672,18 +674,32 @@ async def storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(testo)
 
 
+MAX_CAPTION = 1024  # limite Telegram per la didascalia di una foto
+
+
 async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/podio Sq1 | Sq2 | Sq3 [| descrizione]
+    Funziona come testo, in risposta a una foto o come didascalia di una foto."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Comando riservato agli admin.")
         return
 
-    testo_args = " ".join(context.args) if context.args else ""
-    squadre_podio = [s.strip() for s in testo_args.split("|") if s.strip()]
+    msg = update.message
+    if msg.caption:
+        # comando scritto nella didascalia della foto: tolgo "/podio" (o "/podio@NomeBot")
+        testo_args = re.sub(r"^/podio(?:@\w+)?", "", msg.caption, count=1, flags=re.IGNORECASE)
+    else:
+        testo_args = " ".join(context.args) if context.args else ""
+    parti = [s.strip() for s in testo_args.split("|")]
+    squadre_podio = [s for s in parti[:3] if s]
+    # dal 4° campo in poi: descrizione (eventuali "|" nella descrizione restano)
+    descrizione = " | ".join(parti[3:]).strip()
 
-    if len(squadre_podio) != 3:
+    if len(parti) < 3 or len(squadre_podio) != 3:
         await update.message.reply_text(
-            "Uso corretto: /podio Squadra1 | Squadra2 | Squadra3\n"
-            "(rispondi a una foto del podio se vuoi allegarla all'annuncio)"
+            "Uso corretto: /podio Squadra1 | Squadra2 | Squadra3 | descrizione (facoltativa)\n"
+            "Per allegare la foto: scrivi il comando nella didascalia della foto, "
+            "oppure rispondi alla foto con il comando."
         )
         return
 
@@ -691,24 +707,35 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     torneo_id, nome_torneo = get_torneo_attivo(conn)
     primo, secondo, terzo = squadre_podio
 
-    conn.execute(
-        "UPDATE tornei SET podio_primo = ?, podio_secondo = ?, podio_terzo = ? WHERE id = ?",
-        (primo, secondo, terzo, torneo_id),
-    )
-
-    foto_file_id = None
-    if update.message.reply_to_message and update.message.reply_to_message.photo:
-        foto_file_id = update.message.reply_to_message.photo[-1].file_id
-        conn.execute("UPDATE tornei SET foto_file_id = ? WHERE id = ?", (foto_file_id, torneo_id))
-
-    conn.commit()
-
     caption = (
         f"🏆 Podio — {nome_torneo}\n\n"
         f"🥇 {primo}\n"
         f"🥈 {secondo}\n"
         f"🥉 {terzo}"
     )
+    if descrizione:
+        caption += f"\n\n{descrizione}"
+
+    foto_file_id = None
+    if msg.photo:
+        foto_file_id = msg.photo[-1].file_id
+    elif msg.reply_to_message and msg.reply_to_message.photo:
+        foto_file_id = msg.reply_to_message.photo[-1].file_id
+
+    if foto_file_id and len(caption) > MAX_CAPTION:
+        await update.message.reply_text(
+            f"Descrizione troppo lunga per la didascalia della foto: "
+            f"togli circa {len(caption) - MAX_CAPTION} caratteri e riprova."
+        )
+        return
+
+    conn.execute(
+        "UPDATE tornei SET podio_primo = ?, podio_secondo = ?, podio_terzo = ? WHERE id = ?",
+        (primo, secondo, terzo, torneo_id),
+    )
+    if foto_file_id:
+        conn.execute("UPDATE tornei SET foto_file_id = ? WHERE id = ?", (foto_file_id, torneo_id))
+    conn.commit()
 
     if foto_file_id:
         await context.bot.send_photo(
@@ -1083,6 +1110,10 @@ def main():
     app.add_handler(CommandHandler("torneo", torneo))
     app.add_handler(CommandHandler("storico", storico))
     app.add_handler(CommandHandler("podio", podio))
+    # i comandi scritti nella didascalia di una foto non li vede CommandHandler
+    app.add_handler(MessageHandler(
+        filters.PHOTO & filters.CaptionRegex(r"(?i)^/podio(?:@\w+)?(?:\s|$)"), podio
+    ))
     app.add_handler(CommandHandler("soglia", soglia))
     app.add_handler(CommandHandler("chiudi", chiudi))
     app.add_handler(CommandHandler("apri", apri))
