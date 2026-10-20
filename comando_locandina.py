@@ -5,6 +5,7 @@ e la pubblica nel gruppo subito o all'orario che scegli tu.
 FLUSSO (solo admin, in chat privata col bot):
   /locandina 16/10 volo                 -> data + formula (obbligatori)
   /locandina 16/10 volo tradizionale    -> più formule insieme (anche tutte e 3)
+  /locandina 16/10 5x volo              -> "MODALITÀ 5X" sopra la formula (5x mai da solo)
   /locandina 16/10 rollerball 22:00 25€ -> ora e quota opzionali
   /locandina 16/10 tradizionale premi COPPE -> "premi ..." sempre in fondo
 Il bot risponde con l'anteprima e quattro bottoni:
@@ -125,6 +126,7 @@ def leggi_argomenti(args: list[str]):
 
     ora, quota, premi = ORA_DEFAULT, QUOTA_DEFAULT, PREMI_DEFAULT
     formule = []  # una o più, nell'ordine in cui le scrivi
+    cinque_x = False  # "5x": riga "MODALITÀ 5X" sopra le formule
     resto = args[1:]
     if any(t.lower() == "premi" for t in resto):
         i = [t.lower() for t in resto].index("premi")
@@ -147,14 +149,17 @@ def leggi_argomenti(args: list[str]):
             chiave = "rollerball" if tl in ("3", "tocchi", "3tocchi") else tl
             if chiave not in formule:
                 formule.append(chiave)
+        elif tl == "5x":
+            cinque_x = True
         elif tl in ("e", "&"):
             continue
         else:
             return None, f"Non capisco '{t}'."
 
     if not formule:
-        return None, "Manca la formula: scrivi rollerball, volo o tradizionale (anche più di una)."
-    return {"data": d, "formula": formule, "ora": ora, "quota": quota, "premi": premi}, None
+        return None, "Manca la formula: scrivi rollerball, volo o tradizionale (anche più di una, anche con 5x)."
+    return {"data": d, "formula": formule, "ora": ora, "quota": quota, "premi": premi,
+            "cinque_x": cinque_x}, None
 
 
 def leggi_quando(testo: str):
@@ -192,6 +197,8 @@ def _nome_torneo(conn, dati) -> str:
     """'16/10 Rollerball'; se il nome esiste già nello storico aggiunge l'anno."""
     d = dati["data"]
     formula = "-".join(f.capitalize() for f in dati["formula"])
+    if dati.get("cinque_x"):
+        formula = "5X " + formula
     nome = f"{d.day:02d}/{d.month:02d} {formula}"
     if conn.execute("SELECT 1 FROM tornei WHERE LOWER(nome) = LOWER(?)", (nome,)).fetchone():
         nome = f"{d.day:02d}/{d.month:02d}/{d.year % 100:02d} {formula}"
@@ -273,12 +280,14 @@ async def locandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + "Uso: /locandina 16/10 volo\n"
             "Opzionali: ora (22:00), quota (25€), premi in fondo (premi COPPE)\n"
             "Formule: rollerball, volo, tradizionale — anche più di una: /locandina 16/10 volo tradizionale\n"
+            "Modalità 5X: aggiungi 5x insieme alla formula: /locandina 16/10 5x volo\n"
             f"Se non li scrivi: ore {ORA_DEFAULT}, {QUOTA_DEFAULT} a coppia, premi in {PREMI_DEFAULT}."
         )
         return
 
     png = await asyncio.to_thread(
-        genera_locandina, dati["data"], dati["formula"], dati["ora"], dati["quota"], dati["premi"]
+        genera_locandina, dati["data"], dati["formula"], dati["ora"], dati["quota"], dati["premi"],
+        dati["cinque_x"],
     )
     conn = _conn()
     didascalia = _didascalia(dati)

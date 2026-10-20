@@ -121,16 +121,19 @@ def _box(base, rect, bordo, righe, font, interlinea, pad_top=None, pad_bottom=No
     verde.putalpha(clip)
     base.alpha_composite(verde)
 
-    altezza_riga = font.size * interlinea
+    # ogni riga può essere un testo (usa `font`) o una coppia (testo, font proprio)
+    righe = [r if isinstance(r, tuple) else (r, font) for r in righe]
+    altezza_tot = sum(f.size * interlinea for _, f in righe)
     if pad_top is not None:
         top = y0 + pad_top
     else:
-        top = y0 + ((y1 - y0) - altezza_riga * len(righe)) / 2
+        top = y0 + ((y1 - y0) - altezza_tot) / 2
     testi = []
-    for i, r in enumerate(righe):
-        bl = _baseline(font, top + i * altezza_riga, interlinea)
-        x = (x0 + x1) / 2 - _larghezza(r, font) / 2
-        testi.append((x, bl, r, font, 0))
+    for r, f in righe:
+        bl = _baseline(f, top, interlinea)
+        x = (x0 + x1) / 2 - _larghezza(r, f) / 2
+        testi.append((x, bl, r, f, 0))
+        top += f.size * interlinea
     raggi = (4, 12, 24) if font.size < 90 else (4, 14, 30)
     _testo_neon(base, testi, [(raggi[0], ROSA_SCURO), (raggi[1], ROSA_NEON), (raggi[2], ROSA_NEON)], clip=clip)
 
@@ -139,8 +142,12 @@ def testo_data(d: date, ora: str) -> str:
     return f"{GIORNI[d.weekday()]} {d.day} {MESI[d.month - 1]} ORE {ora}"
 
 
-def genera_locandina(d: date, formula, ora="21:30", quota="20€", premi="BV") -> bytes:
-    """formula: chiave di FORMULE oppure lista di righe già pronte."""
+RIGA_5X = "MODALITÀ 5X"
+
+
+def genera_locandina(d: date, formula, ora="21:30", quota="20€", premi="BV", cinque_x=False) -> bytes:
+    """formula: chiave di FORMULE oppure lista di righe già pronte.
+    cinque_x: aggiunge "MODALITÀ 5X" (più piccolo) sopra le formule."""
     # formula: una chiave ("volo") o una lista di chiavi (["volo", "tradizionale"])
     chiavi = [formula] if isinstance(formula, str) else list(formula)
     if len(chiavi) == 1:
@@ -192,13 +199,16 @@ def genera_locandina(d: date, formula, ora="21:30", quota="20€", premi="BV") -
     f_box = _font(FONT_TITOLI, 72)
     _box(img, (70, 672, 522, 798), BORDO_A, [f"{quota} COPPIA".upper()], f_box, 1.0, pad_top=32)
     _box(img, (70, 824, 522, 950), BORDO_B, [f"PREMI IN {premi}".upper()], f_box, 1.0, pad_top=32)
+    # 5X: "MODALITÀ 5X" in testa e tutte le righe con lo stesso corpo (max 65)
+    righe_box = ([RIGA_5X] if cinque_x else []) + list(righe_formula)
     # corpo massimo che sta nel box sia in altezza sia in larghezza
-    n = len(righe_formula)
-    corpo = min(124 if n == 1 else 108, int((278 - 40) / (n * 0.95)))
+    n = len(righe_box)
+    tetto = 65 if cinque_x else (124 if n == 1 else 108)
+    corpo = min(tetto, int((278 - 40) / (n * 0.95)))
     f_formula = _font(FONT_TITOLI, corpo)
-    while max(_larghezza(r, f_formula) for r in righe_formula) > 452 - 40 and f_formula.size > 40:
+    while max(_larghezza(r, f_formula) for r in righe_box) > 452 - 40 and f_formula.size > 40:
         f_formula = _font(FONT_TITOLI, f_formula.size - 2)
-    _box(img, (558, 672, 1010, 950), BORDO_C, righe_formula, f_formula, 0.95)
+    _box(img, (558, 672, 1010, 950), BORDO_C, righe_box, f_formula, 0.95)
 
     # Info e prenotazioni
     f_info = _font(FONT_TITOLI, 52)
