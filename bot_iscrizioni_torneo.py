@@ -28,7 +28,9 @@ COSA FA:
                             podio del torneo attivo nel gruppo; la descrizione
                             (facoltativa) va sotto il podio, non nello storico.
                             Con foto: comando nella didascalia della foto,
-                            oppure in risposta alla foto.
+                            oppure in risposta alla foto. In privato col bot
+                            mostra l'anteprima e, su "Pubblica", lo manda nel
+                            gruppo registrato con /registragruppo.
 - /chiudi                -> (solo admin) blocca nuove iscrizioni
 - /apri                  -> (solo admin) riapre le iscrizioni
 - /esporta               -> (solo admin) invia elenco squadre in Word (solo nomi) in privato
@@ -60,9 +62,17 @@ from zoneinfo import ZoneInfo
 from docx import Document
 
 import comando_locandina
-from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeChatAdministrators, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeChatAdministrators,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -729,20 +739,95 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    dati = {
+        "torneo_id": torneo_id, "primo": primo, "secondo": secondo, "terzo": terzo,
+        "foto": foto_file_id, "caption": caption,
+    }
+
+    if update.effective_chat.type == "private":
+        # in privato: anteprima con bottoni, poi pubblicazione nel gruppo registrato
+        if not chat_gruppo_registrato(conn):
+            await update.message.reply_text(
+                "Nessun gruppo registrato: scrivi /registragruppo dentro il gruppo, poi riprova."
+            )
+            return
+        # codice dell'anteprima: i bottoni di un'anteprima vecchia non pubblicano quella nuova
+        dati["codice"] = datetime.now().strftime("%H%M%S%f")
+        context.user_data["podio_attesa"] = dati
+        tastiera = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Pubblica nel gruppo", callback_data=f"pod:ok:{dati['codice']}"),
+            InlineKeyboardButton("❌ Annulla", callback_data=f"pod:no:{dati['codice']}"),
+        ]])
+        if foto_file_id:
+            await update.message.reply_photo(photo=foto_file_id, caption=caption, reply_markup=tastiera)
+        else:
+            await update.message.reply_text(caption, reply_markup=tastiera)
+        return
+
+    await pubblica_podio(context.bot, conn, update.effective_chat.id, dati)
+
+
+def chat_gruppo_registrato(conn):
+    """ID del gruppo registrato con /registragruppo (o None)."""
+    row = conn.execute(
+        "SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_CHAT_GIOCO_LIBERO,)
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
+async def pubblica_podio(bot, conn, chat_id: int, dati: dict):
+    """Salva il podio sul torneo e lo pubblica in chat_id."""
     conn.execute(
         "UPDATE tornei SET podio_primo = ?, podio_secondo = ?, podio_terzo = ? WHERE id = ?",
-        (primo, secondo, terzo, torneo_id),
+        (dati["primo"], dati["secondo"], dati["terzo"], dati["torneo_id"]),
     )
-    if foto_file_id:
-        conn.execute("UPDATE tornei SET foto_file_id = ? WHERE id = ?", (foto_file_id, torneo_id))
+    if dati["foto"]:
+        conn.execute("UPDATE tornei SET foto_file_id = ? WHERE id = ?", (dati["foto"], dati["torneo_id"]))
     conn.commit()
-
-    if foto_file_id:
-        await context.bot.send_photo(
-            chat_id=update.effective_chat.id, photo=foto_file_id, caption=caption
-        )
+    if dati["foto"]:
+        await bot.send_photo(chat_id=chat_id, photo=dati["foto"], caption=dati["caption"])
     else:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=caption)
+        await bot.send_message(chat_id=chat_id, text=dati["caption"])
+
+
+async def bottoni_podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bottoni dell'anteprima del podio in privato."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("Riservato agli admin.", show_alert=True)
+        return
+    _, azione, codice = (query.data.split(":") + ["", ""])[:3]
+    dati = context.user_data.get("podio_attesa")
+    if dati is not None and dati.get("codice") != codice:
+        dati = None  # bottone di un'anteprima vecchia
+    else:
+        context.user_data.pop("podio_attesa", None)
+    esito = None
+    if azione == "no":
+        esito = "❌ Podio annullato, non è stato pubblicato."
+    elif dati is None:
+        esito = "⚠️ Anteprima non più valida (già usata, sostituita da una più recente o bot riavviato). Rimanda /podio."
+    else:
+        conn = db_connect()
+        chat_id = chat_gruppo_registrato(conn)
+        if not chat_id:
+            esito = "Nessun gruppo registrato: scrivi /registragruppo dentro il gruppo, poi riprova."
+        else:
+            try:
+                await pubblica_podio(context.bot, conn, chat_id, dati)
+                esito = "✅ Podio pubblicato nel gruppo."
+            except Exception as e:
+                context.user_data["podio_attesa"] = dati  # così puoi riprovare
+                esito = f"⚠️ Pubblicazione non riuscita ({e}). Riprova tra poco."
+    await query.answer()
+    # tolgo i bottoni e aggiungo l'esito sotto l'anteprima
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(caption=(query.message.caption or "") + "\n\n" + esito)
+        else:
+            await query.edit_message_text(text=(query.message.text or "") + "\n\n" + esito)
+    except Exception:
+        await context.bot.send_message(chat_id=query.message.chat_id, text=esito)
 
 
 async def soglia(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1114,6 +1199,7 @@ def main():
     app.add_handler(MessageHandler(
         filters.PHOTO & filters.CaptionRegex(r"(?i)^/podio(?:@\w+)?(?:\s|$)"), podio
     ))
+    app.add_handler(CallbackQueryHandler(bottoni_podio, pattern=r"^pod:"))
     app.add_handler(CommandHandler("soglia", soglia))
     app.add_handler(CommandHandler("chiudi", chiudi))
     app.add_handler(CommandHandler("apri", apri))
