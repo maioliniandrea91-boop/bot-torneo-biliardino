@@ -22,7 +22,7 @@ COSA FA:
 - /nometorneo Nome CONFERMA -> (solo admin) apre un nuovo torneo con questo
                             nome e archivia automaticamente quello precedente
                             (squadre incluse, restano consultabili in /storico)
-- /storico                -> mostra gli ultimi 10 tornei con conteggio squadre
+- /storico [pagina]       -> elenco di tutti i tornei, 10 per pagina
 - /storico Nome           -> mostra le squadre e il podio di un torneo passato
 - /podio Sq1 | Sq2 | Sq3 | descrizione -> (solo admin) registra e annuncia il
                             podio del torneo attivo nel gruppo; la descrizione
@@ -62,6 +62,7 @@ from zoneinfo import ZoneInfo
 from docx import Document
 
 import comando_locandina
+import statistiche
 from telegram import (
     BotCommand,
     BotCommandScopeChat,
@@ -86,6 +87,7 @@ TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_IDS = {int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
 DB_PATH = os.environ.get("DB_PATH", "iscrizioni.db")
 MAX_SQUADRE = 18  # limite massimo di coppie iscrivibili al torneo
+PER_PAGINA_STORICO = 10
 NOME_TORNEO_INIZIALE = "Torneo"
 
 # --- Sondaggio settimanale "gioco libero" ---
@@ -103,7 +105,7 @@ COMANDI = [
     ("squadre", "Mostra l'elenco delle squadre iscritte al torneo attivo"),
     ("ritira", "Annulla una tua iscrizione (indica il nome se ne hai più di una)"),
     ("torneo", "Mostra il nome del torneo attualmente attivo"),
-    ("storico", "Mostra gli ultimi tornei, o i dettagli di uno (/storico Nome)"),
+    ("storico", "Elenco tornei a pagine (/storico 2 = pagina 2), o dettagli di uno (/storico Nome)"),
     ("help", "Mostra questa lista di comandi"),
     ("podio", "[admin] Annuncia il podio — /podio Sq1 | Sq2 | Sq3 | descrizione (facoltativa)"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
@@ -120,7 +122,7 @@ COMANDI = [
     ("vedisondaggio", "[admin] Mostra domanda e opzioni attuali del sondaggio, senza inviarlo"),
     ("anteprimasondaggio", "[admin] Ti manda il sondaggio in privato, così lo vedi prima che parta nel gruppo"),
     ("modificasondaggio", "[admin] Cambia domanda/opzioni — /modificasondaggio Domanda | Opzione1 | Opzione2"),
-] + comando_locandina.COMANDI_LOCANDINA
+] + comando_locandina.COMANDI_LOCANDINA + statistiche.COMANDI_STATISTICHE
 # =========================================
 
 
@@ -394,6 +396,10 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (torneo_id, user.id, user.username or user.first_name, nome_squadra, datetime.now().isoformat()),
     )
     conn.commit()
+    try:
+        statistiche.registra_coppia(conn, nome_squadra)  # anagrafica giocatori
+    except Exception:
+        pass  # l'iscrizione non deve mai fallire per l'anagrafica
 
     await pubblica_lista(update, context, conn, torneo_id, nome_torneo,
                          f"✅ Iscritta: {nome_squadra}")
@@ -632,20 +638,27 @@ async def torneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
 
-    if not context.args:
+    if not context.args or (len(context.args) == 1 and context.args[0].isdigit()):
+        # elenco a pagine: lo storico non ha limiti, si sfoglia con /storico 2, 3...
+        totale = conn.execute("SELECT COUNT(*) FROM tornei").fetchone()[0]
+        pagine = max(1, -(-totale // PER_PAGINA_STORICO))
+        pagina = min(max(int(context.args[0]) if context.args else 1, 1), pagine)
         righe = conn.execute("""
-            SELECT t.id, t.nome, t.chiuso, COUNT(s.id)
+            SELECT t.id, t.nome, t.chiuso, COUNT(s.id), t.podio_primo
             FROM tornei t
             LEFT JOIN squadre s ON s.torneo_id = t.id
             GROUP BY t.id
             ORDER BY t.id DESC
-            LIMIT 10
-        """).fetchall()
+            LIMIT ? OFFSET ?
+        """, (PER_PAGINA_STORICO, (pagina - 1) * PER_PAGINA_STORICO)).fetchall()
 
-        testo = "📜 Ultimi tornei:\n\n"
-        for tid, nome, chiuso, n_squadre in righe:
-            stato_icona = "🔵 (attivo)" if not chiuso else ""
-            testo += f"• {nome} — {n_squadre} squadre {stato_icona}\n"
+        testo = f"📜 Tornei — pagina {pagina}/{pagine} ({totale} in tutto)\n\n"
+        for tid, nome, chiuso, n_squadre, primo in righe:
+            stato_icona = " 🔵 (attivo)" if not chiuso else ""
+            vincitori = f" — 🥇 {primo}" if primo else ""
+            testo += f"• {nome} — {n_squadre} squadre{vincitori}{stato_icona}\n"
+        if pagina < pagine:
+            testo += f"\nPagina successiva: /storico {pagina + 1}"
         testo += "\nDettagli di uno specifico: /storico NomeTorneo"
         await update.message.reply_text(testo)
         return
@@ -781,6 +794,8 @@ async def pubblica_podio(bot, conn, chat_id: int, dati: dict):
         "UPDATE tornei SET podio_primo = ?, podio_secondo = ?, podio_terzo = ? WHERE id = ?",
         (dati["primo"], dati["secondo"], dati["terzo"], dati["torneo_id"]),
     )
+    for sq in (dati["primo"], dati["secondo"], dati["terzo"]):
+        statistiche.registra_coppia(conn, sq)  # giocatori in anagrafica per il medagliere
     if dati["foto"]:
         conn.execute("UPDATE tornei SET foto_file_id = ? WHERE id = ?", (dati["foto"], dati["torneo_id"]))
     conn.commit()
@@ -1211,6 +1226,7 @@ def main():
     app.add_handler(CommandHandler("anteprimasondaggio", anteprimasondaggio))
     app.add_handler(CommandHandler("modificasondaggio", modificasondaggio))
     app.add_handler(MessageHandler(filters.ALL, imposta_menu_per_gruppo), group=1)
+    statistiche.registra(app, db_connect, is_admin, rispondi, cancella_comando)
     comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS, MAX_SQUADRE,
                                ripubblica_lista=ripubblica_lista_gruppo)
 
