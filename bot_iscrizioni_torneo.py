@@ -61,6 +61,7 @@ from zoneinfo import ZoneInfo
 
 from docx import Document
 
+import app_tornei
 import comando_locandina
 import statistiche
 from telegram import (
@@ -122,7 +123,7 @@ COMANDI = [
     ("vedisondaggio", "[admin] Mostra domanda e opzioni attuali del sondaggio, senza inviarlo"),
     ("anteprimasondaggio", "[admin] Ti manda il sondaggio in privato, così lo vedi prima che parta nel gruppo"),
     ("modificasondaggio", "[admin] Cambia domanda/opzioni — /modificasondaggio Domanda | Opzione1 | Opzione2"),
-] + comando_locandina.COMANDI_LOCANDINA + statistiche.COMANDI_STATISTICHE
+] + comando_locandina.COMANDI_LOCANDINA + statistiche.COMANDI_STATISTICHE + app_tornei.COMANDI_APP
 # =========================================
 
 
@@ -1110,6 +1111,9 @@ def testo_help(is_utente_admin: bool) -> str:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args and context.args[0] == "app":   # link "Apri" dal gruppo
+        await app_tornei.invia_bottone_app(update, context)
+        return
     mostra_admin = is_admin(update.effective_user.id) and update.effective_chat.type == "private"
     await update.message.reply_text(testo_help(mostra_admin))
 
@@ -1194,10 +1198,12 @@ async def all_avvio(application):
     await imposta_menu_comandi(application)
     await aggiorna_menu_admin(application)
     await comando_locandina.ripristina_programmate(application)
+    await app_tornei.avvia_server(application)
 
 
 def main():
-    app = Application.builder().token(TOKEN).post_init(all_avvio).build()
+    app = (Application.builder().token(TOKEN).post_init(all_avvio)
+           .post_shutdown(app_tornei.ferma_server).build())
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("iscrivi", iscrivi))
@@ -1229,6 +1235,7 @@ def main():
     statistiche.registra(app, db_connect, is_admin, rispondi, cancella_comando)
     comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS, MAX_SQUADRE,
                                ripubblica_lista=ripubblica_lista_gruppo)
+    app_tornei.registra(app, db_connect, is_admin, rispondi, cancella_comando, TOKEN, ADMIN_IDS)
 
     app.job_queue.run_daily(
         sondaggio_automatico,

@@ -196,6 +196,9 @@ def registra(t: dict, pid: str, giochi: list[tuple[int, int]]) -> None:
     """Punteggi finali reali di ogni partita (in finale già col vantaggio).
     Usabile anche dall'admin per correggere: ricalcola ciò che dipende."""
     p = t["partite"][pid]
+    if p["tab"] == "G" and t["fase"] != "gironi":
+        # il tabellone è già stato costruito su quella classifica
+        raise ValueError("Tabellone già creato: i risultati dei gironi non si possono più cambiare")
     if p["stato"] == "attesa":
         avvia(t, pid)
     r = p["regole"]

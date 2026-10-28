@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tabellone torneo</title>
+<style>
+:root{--bg:#0d1117;--card:#161b24;--card2:#1d2430;--tx:#eef2f7;--hint:#8792a3;--acc:#f5b638;--ok:#39c27a;--line:#283141;--u:clamp(12px,1.05vw,26px)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:500 var(--u)/1.3 "Segoe UI",system-ui,Roboto,sans-serif;overflow:hidden}
+.wrap{height:100%;display:grid;grid-template-rows:auto 1fr;padding:1.2em 1.6em;gap:1em}
+.top{display:flex;align-items:baseline;gap:1em}
+.top h1{font-size:2.2em;margin:0;font-weight:800;letter-spacing:-.01em}
+.top .fase{color:var(--acc);font-weight:700;font-size:1.2em;text-transform:uppercase;letter-spacing:.08em}
+.top .ora{margin-left:auto;font-size:2em;font-weight:700;font-variant-numeric:tabular-nums;color:var(--hint)}
+.grid{display:grid;grid-template-columns:1.55fr 1fr;gap:1.2em;min-height:0}
+.col{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:1em}
+h2{margin:0 0 .5em;font-size:.95em;text-transform:uppercase;letter-spacing:.12em;color:var(--hint);font-weight:700}
+.gironi{display:grid;grid-template-columns:repeat(auto-fit,minmax(18em,1fr));gap:1em;align-content:start}
+.box{background:var(--card);border-radius:.8em;padding:.9em 1em}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:.75em;color:var(--hint);text-align:right;font-weight:600;padding:.2em .3em}
+td{padding:.35em .3em;text-align:right;font-size:1.05em}
+td:nth-child(2),th:nth-child(2){text-align:left;width:100%}
+td:first-child{color:var(--hint);width:1.4em}
+tr+tr td{border-top:1px solid var(--line)}
+td.pt{font-weight:800;color:var(--acc)}
+.rit{text-decoration:line-through;color:var(--hint)}
+.campo{display:grid;gap:.7em}
+.tav{display:grid;grid-template-columns:6.5em 1fr;gap:.9em;align-items:center;background:var(--card2);border-radius:.8em;padding:.8em 1em;border-left:.3em solid var(--ok)}
+.tav .n{font-size:2.6em;font-weight:900;color:var(--ok);text-align:center;line-height:1}
+.tav .n small{display:block;font-size:.3em;letter-spacing:.1em;color:var(--hint);font-weight:700}
+.tav.libero{border-left-color:var(--line);opacity:.5}.tav.libero .n{color:var(--hint)}
+.vs{font-size:1.3em;font-weight:700;line-height:1.25}
+.vs span{color:var(--hint);font-weight:500;font-size:.75em;margin:0 .3em}
+.lab{font-size:.8em;color:var(--hint)}
+.lista .r{display:flex;gap:.8em;padding:.45em 0;align-items:baseline}
+.lista .r+.r{border-top:1px solid var(--line)}
+.lista .r .s{margin-left:auto;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.w{color:var(--ok)}
+.ko{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:.8em;align-items:start}
+.ko .m{background:var(--card2);border-radius:.6em;padding:.45em .7em;margin-bottom:.5em;font-size:.95em}
+.ko .m span{overflow:hidden;text-overflow:ellipsis}
+.ko .m div{display:flex;justify-content:space-between;gap:.5em;white-space:nowrap;overflow:hidden}
+.ko .m .p{color:var(--hint)}
+.ko .m.live{outline:.15em solid var(--ok)}
+.podio{display:flex;align-items:flex-end;justify-content:center;gap:1.5em;height:100%}
+.gradino{text-align:center;width:22%}
+.gradino .nome{font-size:2em;font-weight:800;margin-bottom:.4em}
+.gradino .base{background:var(--card2);border-radius:.6em .6em 0 0;display:flex;align-items:center;justify-content:center;font-size:4em}
+.vuoto{color:var(--hint);text-align:center;margin-top:20vh;font-size:2em}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1 id="nome">Torneo</h1><div class="fase" id="fase"></div><div class="ora" id="ora"></div></div>
+  <div class="grid" id="corpo"><div class="vuoto">Caricamento…</div></div>
+</div>
+<script>
+const TOKEN = location.pathname.split("/").pop();
+const FASI = {nessuna:"In preparazione", iscrizioni:"In preparazione", gironi:"Gironi", ko:"Tabellone", finito:"Concluso"};
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let S = null;
+const sc = p => p.giochi.length === 1 ? p.giochi[0].join("–") :
+  `${p.giochi.filter(g=>g[0]>g[1]).length}–${p.giochi.filter(g=>g[1]>g[0]).length}`;
+
+async function carica(){
+  try{
+    const r = await fetch(`/api/stato?tv=${encodeURIComponent(TOKEN)}` + (S ? `&v=${encodeURIComponent(S.versione)}` : ""));
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.invariato) return;
+    S = d; render();
+  }catch(e){}
+}
+
+function render(){
+  document.getElementById("nome").textContent = S.torneo || "Torneo";
+  document.getElementById("fase").textContent = FASI[S.fase];
+  const c = document.getElementById("corpo");
+  if (!S.partite){ c.innerHTML = '<div class="vuoto" style="grid-column:1/-1">Il torneo sta per iniziare</div>'; return; }
+  if (S.fase === "finito" && S.podio){ c.style.gridTemplateColumns="1fr"; c.innerHTML = podio(); return; }
+  c.style.gridTemplateColumns = "";
+  c.innerHTML = `<div class="col">${S.fase === "gironi" ? gironi() : tabellone()}</div><div class="col">${campo()}${prossime()}${ultimi()}</div>`;
+}
+
+function gironi(){
+  return `<div class="gironi">${S.gironi.map(g => `<div class="box"><h2>${esc(g.nome)}</h2><table>
+    <tr><th>#</th><th>Coppia</th><th>G</th><th>Pt</th><th>DG</th></tr>
+    ${g.classifica.map(r=>`<tr><td>${r.pos}</td><td class="${S.ritirate.includes(r.coppia)?"rit":""}">${esc(r.coppia)}</td><td>${r.g}</td><td class="pt">${r.pt}</td><td>${r.dg>0?"+":""}${r.dg}</td></tr>`).join("")}
+  </table></div>`).join("")}</div>`;
+}
+
+function tabellone(){
+  const col = (tab) => {
+    const turni = {};
+    S.partite.filter(p => p.tab === tab && !p.bye).forEach(p => (turni[p.etichetta] = turni[p.etichetta] || []).push(p));
+    return Object.entries(turni).map(([t, ps]) => `<div><h2>${esc(t.replace(" · turno ", " "))}</h2>${ps.map(m).join("")}</div>`).join("");
+  };
+  const fin = S.partite.filter(p => p.tab === "F");
+  return `<div class="box"><h2>Tabellone vincenti</h2><div class="ko">${col("W")}</div></div>
+    <div class="box"><h2>Tabellone perdenti</h2><div class="ko">${col("L")}${fin.length ? `<div><h2>Finale</h2>${fin.map(m).join("")}</div>` : ""}</div></div>`;
+}
+function m(p){
+  const f = p.stato === "finita", g = f ? p.giochi : [];
+  const va = g.filter(x=>x[0]>x[1]).length, vb = g.filter(x=>x[1]>x[0]).length;
+  const sa = !f ? "" : (g.length === 1 ? g[0][0] : va), sb = !f ? "" : (g.length === 1 ? g[0][1] : vb);
+  const cl = x => f ? (p.vincitore === x ? "w" : "p") : "";
+  return `<div class="m ${p.stato==="in_corso"?"live":""}"><div class="${cl(p.a)}"><span>${esc(p.a || "…")}</span><b>${sa}</b></div><div class="${cl(p.b)}"><span>${esc(p.b || "…")}</span><b>${sb}</b></div></div>`;
+}
+
+function campo(){
+  const n = S.config.biliardini, inCorso = {};
+  S.partite.filter(p=>p.stato==="in_corso").forEach(p => inCorso[p.biliardino] = p);
+  let h = "";
+  for (let b = 1; b <= n; b++){
+    const p = inCorso[b];
+    h += p ? `<div class="tav"><div class="n"><small>BILIARDINO</small>${b}</div><div><div class="lab">${esc(p.etichetta)}${p.regole.al_meglio_di===3?" · 2 su 3":""}${p.regole.vantaggio_a?` · +${p.regole.vantaggio_a} ${esc(p.a)}`:""}</div><div class="vs">${esc(p.a)}<span>vs</span>${esc(p.b)}</div></div></div>`
+           : `<div class="tav libero"><div class="n"><small>BILIARDINO</small>${b}</div><div class="vs">Libero</div></div>`;
+  }
+  return `<div><h2>In campo</h2><div class="campo">${h}</div></div>`;
+}
+function prossime(){
+  const ps = S.partite.filter(p => p.stato === "attesa" && p.a && p.b && !p.bye).slice(0, 4);
+  if (!ps.length) return "";
+  return `<div class="box lista"><h2>Prossime</h2>${ps.map(p=>`<div class="r"><span>${esc(p.a)} <span class="lab">vs</span> ${esc(p.b)}</span><span class="s lab">${esc(p.etichetta.replace("Girone ","").replace(" · giornata "," g"))}</span></div>`).join("")}</div>`;
+}
+function ultimi(){
+  const ps = S.partite.filter(p => p.stato === "finita" && !p.bye)
+    .sort((a,b) => (a.finita_il||"").localeCompare(b.finita_il||"")).slice(-4).reverse();
+  if (!ps.length) return "";
+  return `<div class="box lista"><h2>Ultimi risultati</h2>${ps.map(p=>`<div class="r"><span><span class="${p.vincitore===p.a?"w":""}">${esc(p.a)}</span> <span class="lab">vs</span> <span class="${p.vincitore===p.b?"w":""}">${esc(p.b)}</span></span><span class="s">${sc(p)}</span></div>`).join("")}</div>`;
+}
+function podio(){
+  const [p1,p2,p3] = S.podio;
+  const g = (n, e, h) => `<div class="gradino"><div class="nome">${esc(n)}</div><div class="base" style="height:${h}vh">${e}</div></div>`;
+  return `<div class="podio">${g(p2,"🥈",22)}${g(p1,"🥇",34)}${g(p3,"🥉",14)}</div>`;
+}
+
+function orologio(){ document.getElementById("ora").textContent = new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}); }
+orologio(); setInterval(orologio, 10000);
+carica(); setInterval(carica, 4000);
+</script>
+</body>
+</html>

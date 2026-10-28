@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Torneo biliardino</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:var(--tg-theme-bg-color,#fff);
+  --bg2:var(--tg-theme-secondary-bg-color,#f1f2f5);
+  --tx:var(--tg-theme-text-color,#111);
+  --hint:var(--tg-theme-hint-color,#8a8f98);
+  --acc:var(--tg-theme-button-color,#2f7de1);
+  --acc-tx:var(--tg-theme-button-text-color,#fff);
+  --link:var(--tg-theme-link-color,#2f7de1);
+  --red:var(--tg-theme-destructive-text-color,#e5484d);
+  --ok:#2e9f5b; --warn:#d98a00;
+  --line:color-mix(in srgb,var(--tx) 10%,transparent);
+  --r:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg2);color:var(--tx);font:15px/1.35 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 16px 0;border-bottom:1px solid var(--line)}
+h1{font-size:18px;margin:0 0 2px;font-weight:700}
+.sub{color:var(--hint);font-size:13px}
+nav{display:flex;gap:4px;margin-top:10px;overflow-x:auto;scrollbar-width:none}
+nav button{flex:1;min-width:max-content;border:0;background:none;color:var(--hint);font:600 14px inherit;font-family:inherit;padding:10px 8px;border-bottom:2px solid transparent}
+nav button.on{color:var(--acc);border-color:var(--acc)}
+main{padding:12px 12px 0}
+section{margin-bottom:18px}
+h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--hint);margin:6px 6px 8px;font-weight:600}
+.card{background:var(--bg);border-radius:var(--r);padding:12px 14px;margin-bottom:8px}
+.match{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center}
+.match .lab{grid-column:1/-1;font-size:12px;color:var(--hint);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.team{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team.win{color:var(--ok)}
+.team.lose{color:var(--hint);font-weight:500}
+.score{font-variant-numeric:tabular-nums;font-weight:700;text-align:right;white-space:nowrap}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;background:var(--bg2);color:var(--hint)}
+.pill.live{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.pill.mine{background:color-mix(in srgb,var(--acc) 15%,transparent);color:var(--acc)}
+.actions{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+button.b{border:0;border-radius:10px;padding:9px 12px;font:600 14px inherit;font-family:inherit;background:var(--bg2);color:var(--tx)}
+button.b.pri{background:var(--acc);color:var(--acc-tx)}
+button.b.red{color:var(--red)}
+button.b.big{width:100%;padding:13px;font-size:15px}
+button.b:disabled{opacity:.45}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:6px 4px;text-align:right;font-size:14px}
+th{font-size:11px;color:var(--hint);font-weight:600}
+td:nth-child(2),th:nth-child(2){text-align:left;width:100%}
+td:first-child{color:var(--hint);width:1.5em}
+tr+tr td{border-top:1px solid var(--line)}
+.rit{text-decoration:line-through;color:var(--hint)}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 0}
+.row+.row{border-top:1px solid var(--line)}
+.step{display:flex;align-items:center;gap:6px}
+.step button{width:34px;height:34px;border-radius:9px;border:0;background:var(--bg2);color:var(--tx);font-size:18px}
+.step span{min-width:2ch;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+.seg{display:flex;background:var(--bg2);border-radius:10px;padding:3px;gap:3px}
+.seg button{flex:1;border:0;background:none;padding:8px 4px;border-radius:8px;font:600 13px inherit;font-family:inherit;color:var(--tx)}
+.seg button.on{background:var(--bg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+select{font:inherit;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--tx);max-width:100%}
+.muted{color:var(--hint);font-size:13px}
+.empty{text-align:center;color:var(--hint);padding:28px 10px}
+.podio{display:grid;gap:6px}
+.podio div{display:flex;gap:10px;align-items:center;font-weight:700;font-size:17px}
+.toast{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));background:#222;color:#fff;padding:12px 14px;border-radius:12px;font-size:14px;z-index:30;transform:translateY(150%);transition:transform .2s}
+.toast.on{transform:none}.toast.err{background:var(--red)}
+/* foglio risultato */
+.veil{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:20;display:none}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:21;background:var(--bg);border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto;transform:translateY(105%);transition:transform .22s}
+.sheet.on{transform:none}.veil.on{display:block}
+.game{border:1px solid var(--line);border-radius:12px;padding:10px;margin:10px 0}
+.game .who{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.game .who button{border:1.5px solid var(--line);background:none;border-radius:10px;padding:10px 6px;font:600 14px inherit;font-family:inherit;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.game .who button.on{border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chips button{width:40px;height:38px;border-radius:9px;border:0;background:var(--bg2);color:var(--tx);font:700 15px inherit;font-family:inherit}
+.chips button.on{background:var(--acc);color:var(--acc-tx)}
+.sum{font-size:22px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;margin:6px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="titolo">Torneo</h1>
+  <div class="sub" id="sottotitolo">Caricamento…</div>
+  <nav id="tabs"></nav>
+</header>
+<main id="main"></main>
+<div class="veil" id="veil"></div>
+<div class="sheet" id="sheet"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const INIT = tg ? tg.initData : "";
+let S = null, tab = null, foglioAperto = false, bozza = {};
+const FASI = {nessuna:"Da preparare", iscrizioni:"Pronto per i gironi", gironi:"Gironi in corso", ko:"Tabellone a eliminazione", finito:"Concluso"};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const vibra = t => { try { tg.HapticFeedback.notificationOccurred(t); } catch(e){} };
+
+function toast(msg, err){ const t=$("#toast"); t.textContent=msg; t.className="toast on"+(err?" err":""); clearTimeout(t._h); t._h=setTimeout(()=>t.className="toast",2600); }
+
+async function carica(forza){
+  if (!INIT) { $("#main").innerHTML = '<div class="empty">Apri questa pagina dal bot su Telegram (comando /app).</div>'; $("#sottotitolo").textContent=""; return; }
+  try{
+    const r = await fetch("/api/stato" + (S && !forza ? "?v=" + encodeURIComponent(S.versione) : ""), {headers:{"X-Init-Data":INIT}});
+    if (r.status === 401) { $("#main").innerHTML='<div class="empty">Sessione scaduta: chiudi e riapri l\'app.</div>'; return; }
+    const d = await r.json();
+    if (d.invariato) return;
+    S = d; if (!foglioAperto) render();
+  }catch(e){ /* rete assente: riprova al prossimo giro */ }
+}
+
+async function azione(dati, okMsg){
+  try{
+    const r = await fetch("/api/azione", {method:"POST", headers:{"X-Init-Data":INIT,"Content-Type":"application/json"}, body:JSON.stringify(dati)});
+    const d = await r.json();
+    if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return null; }
+    vibra("success"); if (okMsg) toast(okMsg);
+    await carica(true);
+    return d;
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+
+/* ---------- utilità partite ---------- */
+const admin = () => S.ruolo && S.ruolo.admin;
+const mie = () => (S.ruolo && S.ruolo.coppie) || [];
+const eMia = p => mie().includes(p.a) || mie().includes(p.b);
+function punteggio(p){
+  if (!p.giochi.length) return "";
+  if (p.giochi.length === 1) return `${p.giochi[0][0]}–${p.giochi[0][1]}`;
+  const va = p.giochi.filter(g=>g[0]>g[1]).length, vb = p.giochi.length - va;
+  return `${va}–${vb} <span class="muted">(${p.giochi.map(g=>g.join("-")).join(", ")})</span>`;
+}
+function formatoTesto(p){
+  const r = p.regole, s = [];
+  if (r.al_meglio_di === 3) s.push("2 su 3");
+  if (r.vantaggio_a) s.push(`+${r.vantaggio_a} a ${p.a ? esc(p.a) : "vincenti"}`);
+  return s.join(" · ");
+}
+function cardPartita(p, conAzioni=true){
+  const fin = p.stato === "finita";
+  const ca = fin ? (p.vincitore===p.a?"win":"lose") : "", cb = fin ? (p.vincitore===p.b?"win":"lose") : "";
+  const tags = [];
+  if (p.stato === "in_corso") tags.push(`<span class="pill live">Biliardino ${p.biliardino}</span>`);
+  if (eMia(p)) tags.push('<span class="pill mine">Tua</span>');
+  if (p.tavolino) tags.push('<span class="pill">Tavolino</span>');
+  if (p.proposta) tags.push(p.proposta.contestata ? '<span class="pill warn">Contestato</span>' : '<span class="pill warn">Da confermare</span>');
+  const f = formatoTesto(p);
+  let az = "";
+  if (conAzioni && p.a && p.b && !p.bye){
+    const btn = [];
+    const prop = p.proposta;
+    const altraPropone = prop && eMia(p) && !mie().includes(prop.da) && !fin;
+    if (altraPropone && !prop.contestata){
+      btn.push(`<button class="b pri" onclick="conferma('${p.id}')">Conferma ${esc(prop.giochi.map(g=>g.join("-")).join(", "))}</button>`);
+      btn.push(`<button class="b red" onclick="contesta('${p.id}')">Contesta</button>`);
+    } else if (!fin && eMia(p) && !admin()){
+      btn.push(`<button class="b ${p.stato==="in_corso"?"pri":""}" onclick="apriRisultato('${p.id}')">${prop && mie().includes(prop.da) ? "Modifica risultato" : "Inserisci risultato"}</button>`);
+    }
+    if (admin()){
+      if (p.stato === "attesa" && S.pronte.includes(p.id))
+        S.biliardini_liberi.forEach(b => btn.push(`<button class="b" onclick="avvia('${p.id}',${b})">▶ Biliardino ${b}</button>`));
+      if (p.stato === "in_corso") btn.push(`<button class="b" onclick="ferma('${p.id}')">Ferma</button>`);
+      const correggibile = p.tab !== "G" || S.fase === "gironi";
+      if (correggibile) btn.push(`<button class="b ${p.stato==="in_corso"||prop?"pri":""}" onclick="apriRisultato('${p.id}')">${fin ? "Correggi" : "Risultato"}</button>`);
+    }
+    if (btn.length) az = `<div class="actions">${btn.join("")}</div>`;
+  }
+  return `<div class="card match">
+    <div class="lab">${esc(p.etichetta)}${f ? " · " + f : ""} ${tags.join(" ")}</div>
+    <div class="team ${ca}">${esc(p.a || "—")}</div><div class="score">${fin ? punteggio(p) : ""}</div>
+    <div class="team ${cb}">${esc(p.b || "—")}</div><div class="score"></div>
+    ${p.proposta && !fin ? `<div class="lab">Proposto da ${esc(p.proposta.da)}: ${p.proposta.giochi.map(g=>g.join("-")).join(", ")}${p.proposta.controproposta ? " · l'altra coppia dice " + p.proposta.controproposta.map(g=>g.join("-")).join(", ") : ""}</div>` : ""}
+    ${az}</div>`;
+}
+
+/* ---------- schede ---------- */
+function render(){
+  $("#titolo").textContent = S.torneo || "Torneo";
+  $("#sottotitolo").textContent = FASI[S.fase] + (S.config ? ` · ${S.coppie.length} coppie · a ${S.config.gol} gol · ${S.config.biliardini} biliardini` : "");
+  const schede = [];
+  if (["gironi","ko","finito"].includes(S.fase)) schede.push(["partite","Partite"],["gironi","Gironi"]);
+  if (["ko","finito"].includes(S.fase)) schede.push(["tabellone","Tabellone"]);
+  if (admin()) schede.push(["admin","Gestione"]);
+  if (!schede.length) schede.push(["attesa","Torneo"]);
+  if (!tab || !schede.some(s=>s[0]===tab)) tab = schede[0][0];
+  $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
+  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa})[tab]();
+}
+function vai(k){ tab = k; render(); window.scrollTo(0,0); }
+
+function vAttesa(){
+  const n = (S.iscritte || S.coppie || []).length;
+  return `<div class="empty">Il torneo non è ancora partito.<br>${n} coppie iscritte.</div>`;
+}
+
+function vPartite(){
+  const P = S.partite.filter(p => !p.bye);
+  let h = "";
+  if (S.fase === "finito" && S.podio) h += vPodio();
+  const daConfermare = P.filter(p => p.proposta && p.stato !== "finita" && (admin() ? p.proposta.contestata : (eMia(p) && !mie().includes(p.proposta.da))));
+  if (daConfermare.length) h += `<section><h2>${admin() ? "Contestati: decidi tu" : "Da confermare"}</h2>${daConfermare.map(p=>cardPartita(p)).join("")}</section>`;
+  const mieP = P.filter(p => eMia(p) && p.stato !== "finita" && !daConfermare.includes(p));
+  if (mieP.length) h += `<section><h2>Le tue partite</h2>${mieP.map(p=>cardPartita(p)).join("")}</section>`;
+  const inCorso = P.filter(p => p.stato === "in_corso" && !mieP.includes(p) && !daConfermare.includes(p));
+  if (inCorso.length) h += `<section><h2>In campo</h2>${inCorso.map(p=>cardPartita(p)).join("")}</section>`;
+  if (admin() && S.fase !== "finito") h += `<section><button class="b pri big" onclick="chiama()" ${S.biliardini_liberi.length && S.pronte.length ? "" : "disabled"}>📣 Chiama partite (${S.biliardini_liberi.length} biliardini liberi)</button></section>`;
+  const pronte = P.filter(p => S.pronte.includes(p.id) && !mieP.includes(p) && !daConfermare.includes(p));
+  if (pronte.length) h += `<section><h2>Prossime</h2>${pronte.map(p=>cardPartita(p)).join("")}</section>`;
+  const attesa = P.filter(p => p.stato === "attesa" && p.a && p.b && !S.pronte.includes(p.id) && !mieP.includes(p) && !daConfermare.includes(p));
+  if (attesa.length) h += `<section><h2>Da giocare</h2>${attesa.map(p=>cardPartita(p)).join("")}</section>`;
+  const giocate = P.filter(p => p.stato === "finita").reverse();
+  if (giocate.length) h += `<section><h2>Giocate</h2>${giocate.map(p=>cardPartita(p, admin())).join("")}</section>`;
+  return h || '<div class="empty">Nessuna partita.</div>';
+}
+
+function vGironi(){
+  return S.gironi.map(g => `<section><h2>${esc(g.nome)}</h2><div class="card"><table>
+    <tr><th>#</th><th>Coppia</th><th>G</th><th>Pt</th><th>GF</th><th>GS</th><th>DG</th></tr>
+    ${g.classifica.map(r => `<tr><td>${r.pos}</td><td class="${S.ritirate.includes(r.coppia)?"rit":""}">${esc(r.coppia)}${mie().includes(r.coppia)?' <span class="pill mine">Tu</span>':""}</td><td>${r.g}</td><td><b>${r.pt}</b></td><td>${r.gf}</td><td>${r.gs}</td><td>${r.dg>0?"+":""}${r.dg}</td></tr>`).join("")}
+  </table></div></section>`).join("") + '<p class="muted" style="margin:0 6px">Vittoria 3 pt · vittoria di un gol 2-1 · parità: differenza gol, scontro diretto, sorteggio.</p>';
+}
+
+function vTabellone(){
+  const P = S.partite.filter(p => p.tab !== "G");
+  let h = S.fase === "finito" && S.podio ? vPodio() : "";
+  const gruppi = {};
+  P.forEach(p => { (gruppi[p.etichetta] = gruppi[p.etichetta] || []).push(p); });
+  const ordine = Object.keys(gruppi);
+  const W = ordine.filter(k => k.startsWith("Vincenti") || k==="Finale vincenti");
+  const L = ordine.filter(k => k.startsWith("Perdenti") || k==="Finale perdenti");
+  const blocco = (titolo, chiavi) => chiavi.length ? `<h2 style="margin-top:14px">${titolo}</h2>` + chiavi.map(k => `<section><h2>${esc(k)} · ${gruppi[k][0].regole.al_meglio_di===3?"2 su 3":"secca"}</h2>${gruppi[k].map(p => p.bye ? `<div class="card match"><div class="team">${esc(p.a==="BYE"?p.b:p.a) || "—"}</div><div class="score"><span class="pill">BYE</span></div></div>` : cardPartita(p, false)).join("")}</section>`).join("") : "";
+  h += blocco("Tabellone vincenti", W) + blocco("Tabellone perdenti", L);
+  if (gruppi["Finale"]) h += `<h2 style="margin-top:14px">Finale</h2>` + gruppi["Finale"].map(p=>cardPartita(p,false)).join("");
+  return h;
+}
+
+function vPodio(){
+  const m = ["🥇","🥈","🥉"];
+  return `<section><div class="card podio">${S.podio.map((c,i)=>`<div>${m[i]} ${esc(c)}</div>`).join("")}</div></section>`;
+}
+
+/* ---------- gestione (admin) ---------- */
+let prev = null, metodo = "teste", nGironi = 2, manuale = {};
+function vAdmin(){
+  let h = "";
+  if (S.fase === "nessuna"){
+    h += `<section><h2>Iscritte al torneo attivo (${S.iscritte.length})</h2><div class="card">${S.iscritte.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c)}</span></div>`).join("") || '<span class="muted">Nessuna coppia</span>'}</div>
+      <button class="b pri big" onclick="prepara()" ${S.iscritte.length>=4?"":"disabled"}>Prepara il torneo con queste coppie</button>
+      <p class="muted" style="margin:8px 6px">Le coppie vengono prese dalle iscrizioni del bot. Servono almeno 4 coppie.</p></section>`;
+    return h;
+  }
+  if (S.fase === "iscrizioni"){
+    if (!nGironi || nGironi > Math.floor(S.coppie.length/2)) nGironi = S.coppie.length > 12 ? 3 : 2;
+    h += `<section><h2>Coppie (${S.coppie.length})</h2><div class="card">${S.coppie.map((c,i)=>`<div class="row"><span>${esc(c)}</span>${metodo==="manuale" ? selGirone(c,i) : (prev && prev.forza ? `<span class="muted">forza ${prev.forza[c]}</span>` : "")}</div>`).join("")}</div>
+      <button class="b big" onclick="prepara()">↻ Ricarica coppie dalle iscrizioni</button></section>`;
+    h += impostazioni();
+    h += `<section><h2>Gironi</h2><div class="card">
+      <div class="row"><span>Numero di gironi</span><div class="step"><button onclick="setG(-1)">−</button><span>${nGironi}</span><button onclick="setG(1)">+</button></div></div>
+      <div class="row" style="display:block"><div class="seg">${[["teste","Teste di serie"],["sorteggio","Sorteggio"],["manuale","Manuale"]].map(([k,n])=>`<button class="${metodo===k?"on":""}" onclick="setM('${k}')">${n}</button>`).join("")}</div></div>
+      </div>
+      <button class="b big" onclick="anteprima(false)">Anteprima e durata stimata</button>
+      ${metodo==="sorteggio" ? '<button class="b big" style="margin-top:6px" onclick="anteprima(true)">🎲 Nuovo sorteggio</button>' : ""}
+      ${prev ? vPrev() : ""}
+    </section>`;
+    return h;
+  }
+  // gironi / ko / finito
+  if (S.url_tv) h += `<section><h2>Pagina TV</h2><div class="card"><div class="row"><span class="muted" style="word-break:break-all">${esc(S.url_tv)}</span><button class="b" onclick="copia()">Copia</button></div></div></section>`;
+  if (S.fase === "gironi"){
+    const mancano = S.partite.filter(p=>p.tab==="G" && p.stato!=="finita").length;
+    h += `<section><button class="b pri big" onclick="tabellone()" ${mancano?"disabled":""}>Crea tabellone doppio KO</button><p class="muted" style="margin:8px 6px">${mancano ? `Mancano ${mancano} partite dei gironi.` : "Gironi conclusi: crea il tabellone. Dopo non si possono più correggere i gironi."}</p></section>`;
+  }
+  if (S.fase !== "finito") h += impostazioni();
+  if (S.formati && S.fase === "ko"){
+    h += `<section><h2>Formato per turno</h2><div class="card">${Object.entries(S.formati).map(([k,v])=>`<div class="row"><span>${esc(nomeTurno(k))}</span><div class="seg" style="width:170px"><button class="${v===1?"on":""}" onclick="formato('${k}',1)">Secca</button><button class="${v===3?"on":""}" onclick="formato('${k}',3)">2 su 3</button></div></div>`).join("")}</div><p class="muted" style="margin:8px 6px">Si può cambiare solo per i turni non ancora iniziati.</p></section>`;
+  }
+  if (S.fase !== "finito"){
+    const attive = S.coppie.filter(c=>!S.ritirate.includes(c));
+    h += `<section><h2>Ritiro coppia</h2><div class="card"><div class="row"><select id="selRit">${attive.map(c=>`<option>${esc(c)}</option>`).join("")}</select><button class="b red" onclick="ritira()">Ritira</button></div><p class="muted">Le partite restanti sono perse a tavolino ${S.config.gol}-0.</p></div></section>`;
+  }
+  h += `<section><button class="b red big" onclick="ricomincia()">Ricomincia da capo (cancella gironi e risultati)</button></section>`;
+  return h;
+}
+function nomeTurno(k){
+  if (k==="F") return "Finale";
+  const p = S.partite.find(p=>p.chiave_turno===k);
+  return p ? p.etichetta : k;
+}
+function impostazioni(){
+  const c = S.config;
+  const riga = (k, n, min, max) => `<div class="row"><span>${n}</span><div class="step"><button onclick="imposta('${k}',${c[k]-1},${min},${max})">−</button><span>${c[k]}</span><button onclick="imposta('${k}',${c[k]+1},${min},${max})">+</button></div></div>`;
+  return `<section><h2>Impostazioni</h2><div class="card">${riga("gol","Gol per partita",3,15)}${riga("biliardini","Biliardini",1,6)}${S.fase!=="iscrizioni"?riga("vantaggio_finale","Vantaggio in finale (gol)",0,c.gol-1):""}${S.fase==="iscrizioni"?riga("minuti_partita","Minuti a partita (stima)",3,20):""}</div><p class="muted" style="margin:8px 6px">Valgono per le partite non ancora iniziate.</p></section>`;
+}
+function selGirone(c, idx){
+  return `<select onchange="manuale[S.coppie[${idx}]]=+this.value">${Array.from({length:nGironi},(_,i)=>`<option value="${i}" ${(manuale[c]??0)===i?"selected":""}>Girone ${"ABCDEFGHIJ"[i]}</option>`).join("")}</select>`;
+}
+function vPrev(){
+  const ore = Math.floor(prev.minuti/60), min = prev.minuti%60;
+  return `<div class="card" style="margin-top:10px">${prev.gironi.map((g,i)=>`<div class="row" style="display:block"><b>Girone ${"ABCDEFGHIJ"[i]}</b> <span class="muted">(${g.length})</span><div class="muted" style="color:var(--tx)">${g.map(esc).join(" · ")}</div></div>`).join("")}
+    <div class="row"><span>Durata stimata</span><b>${ore} h ${String(min).padStart(2,"0")}′</b></div></div>
+    <button class="b pri big" onclick="creaGironi()">Conferma gironi</button>
+    <p class="muted" style="margin:8px 6px">Confermati, i gironi restano fissi e le iscrizioni vengono chiuse.</p>`;
+}
+function setG(d){ const max=Math.floor(S.coppie.length/2); nGironi=Math.min(max,Math.max(1,nGironi+d)); prev=null; render(); }
+function setM(m){ metodo=m; prev=null; render(); }
+function datiGironi(){
+  const d = {n_gironi:nGironi, metodo};
+  if (metodo==="manuale"){ const g = Array.from({length:nGironi},()=>[]); S.coppie.forEach(c=>g[manuale[c]??0].push(c)); d.manuale = g; }
+  return d;
+}
+async function anteprima(rimescola){
+  toast("Calcolo in corso…");
+  const r = await azione({azione:"anteprima_gironi", ...datiGironi(), rimescola});
+  if (r){ prev = r; render(); }
+}
+async function creaGironi(){
+  if (!await chiedi("Confermi i gironi? Poi non si cambiano più.")) return;
+  if (await azione({azione:"crea_gironi", ...datiGironi()}, "Gironi creati")){ prev=null; tab="partite"; render(); }
+}
+async function prepara(){ prev=null; await azione({azione:"prepara"}, "Coppie caricate"); }
+async function imposta(k, v, min, max){ if (v<min||v>max) return; prev=null; await azione({azione:"imposta", valori:{[k]:v}}); }
+async function formato(k, v){ await azione({azione:"formato", turno:k, al_meglio_di:v}); }
+async function tabellone(){ if (await chiedi("Creo il tabellone? I risultati dei gironi non saranno più modificabili.")) { await azione({azione:"crea_tabellone"}, "Tabellone creato"); tab="partite"; render(); } }
+async function ritira(){ const c=$("#selRit").value; if (await chiedi(`Ritirare ${c}? Partite restanti perse a tavolino.`)) await azione({azione:"ritira", coppia:c}, "Coppia ritirata"); }
+async function ricomincia(){ if (await chiedi("Cancello gironi, tabellone e risultati di questo torneo?")) { await azione({azione:"ricomincia", conferma:"RICOMINCIA"}, "Torneo azzerato"); tab=null; } }
+async function chiama(){ const r = await azione({azione:"chiama"}); if (r) toast(`Chiamate ${r.chiamate.length} partite`); }
+async function avvia(pid,b){ await azione({azione:"avvia", pid, biliardino:b}, `Avviata sul biliardino ${b}`); }
+async function ferma(pid){ await azione({azione:"ferma", pid}); }
+async function conferma(pid){ await azione({azione:"conferma", pid}, "Risultato confermato"); }
+async function contesta(pid){ if (await chiedi("Contesti il risultato? Deciderà l'admin.")) await azione({azione:"contesta", pid}, "Segnalato all'admin"); }
+function copia(){ navigator.clipboard?.writeText(S.url_tv).then(()=>toast("Link copiato"), ()=>toast("Copia non riuscita", true)); }
+function chiedi(msg){ return new Promise(res => tg && tg.showConfirm ? tg.showConfirm(msg, res) : res(confirm(msg))); }
+
+/* ---------- inserimento risultato ---------- */
+function apriRisultato(pid){
+  const p = S.partite.find(x=>x.id===pid);
+  const base = (p.proposta && p.proposta.giochi) || (p.giochi.length ? p.giochi : []);
+  bozza = {p, giochi: base.map(g => ({vince: g[0]>g[1] ? "a" : "b", perde: Math.min(g[0],g[1])}))};
+  if (!bozza.giochi.length) bozza.giochi.push({vince:null, perde:null});
+  foglioAperto = true; disegnaFoglio();
+  $("#veil").classList.add("on"); $("#sheet").classList.add("on");
+}
+function chiudiFoglio(){ foglioAperto=false; $("#veil").classList.remove("on"); $("#sheet").classList.remove("on"); render(); }
+$("#veil").onclick = chiudiFoglio;
+function giochiCompleti(){
+  const p = bozza.p, gol = p.regole.gol, out = [];
+  for (const g of bozza.giochi){ if (g.vince==null || g.perde==null) return null; out.push(g.vince==="a" ? [gol, g.perde] : [g.perde, gol]); }
+  return out;
+}
+function stato(){
+  const serve = Math.floor(bozza.p.regole.al_meglio_di/2)+1;
+  let va=0, vb=0; bozza.giochi.forEach(g=>{ if(g.vince==="a")va++; if(g.vince==="b")vb++; });
+  return {va, vb, serve, deciso: va===serve || vb===serve};
+}
+function disegnaFoglio(){
+  const p = bozza.p, r = p.regole, gol = r.gol;
+  // aggiunge/toglie partite secondo l'andamento
+  let st = stato();
+  while (!st.deciso && bozza.giochi.every(g=>g.vince && g.perde!=null) && bozza.giochi.length < r.al_meglio_di){ bozza.giochi.push({vince:null, perde:null}); st = stato(); }
+  let va=0, vb=0, tronca=bozza.giochi.length;
+  bozza.giochi.forEach((g,i)=>{ if(g.vince==="a")va++; if(g.vince==="b")vb++; if((va===st.serve||vb===st.serve) && tronca===bozza.giochi.length) tronca=i+1; });
+  bozza.giochi = bozza.giochi.slice(0, tronca); st = stato();
+  const giochiHtml = bozza.giochi.map((g,i) => {
+    const perdeA = g.vince==="b"; // perdente = a: in finale parte dal vantaggio
+    const min = perdeA ? (r.vantaggio_a||0) : 0;
+    const chips = g.vince ? Array.from({length: gol-min}, (_,k)=>k+min).map(n=>`<button class="${g.perde===n?"on":""}" onclick="setPerde(${i},${n})">${n}</button>`).join("") : "";
+    return `<div class="game"><div class="muted" style="margin-bottom:6px">${r.al_meglio_di>1?`Partita ${i+1} · `:""}chi ha vinto?</div>
+      <div class="who"><button class="${g.vince==="a"?"on":""}" onclick="setVince(${i},'a')">${esc(p.a)}</button><button class="${g.vince==="b"?"on":""}" onclick="setVince(${i},'b')">${esc(p.b)}</button></div>
+      ${g.vince ? `<div class="muted" style="margin-top:10px">Gol di ${esc(g.vince==="a"?p.b:p.a)} (chi perde)</div><div class="chips">${chips}</div>` : ""}</div>`;
+  }).join("");
+  const giochi = giochiCompleti(), pronto = giochi && st.deciso;
+  const coppia = admin() ? "" : (mie().find(c=>c===p.a||c===p.b) || "");
+  const riepilogo = giochi ? giochi.map(g=>g.join("–")).join("  ·  ") : "";
+  $("#sheet").innerHTML = `<div class="muted">${esc(p.etichetta)}${r.al_meglio_di>1?" · al meglio di 3":""} · a ${gol} gol</div>
+    <div style="font-weight:700;margin:4px 0 2px">${esc(p.a)} — ${esc(p.b)}</div>
+    ${r.vantaggio_a ? `<div class="muted">${esc(p.a)} parte con ${r.vantaggio_a} gol: inserisci il punteggio finale reale.</div>` : ""}
+    ${giochiHtml}
+    <div class="sum">${riepilogo || "&nbsp;"}</div>
+    <button class="b pri big" ${pronto?"":"disabled"} onclick="salvaRisultato()">${admin() ? "Salva risultato" : "Invia all'altra coppia"}</button>
+    <button class="b big" style="margin-top:6px" onclick="chiudiFoglio()">Annulla</button>
+    ${!admin() ? '<p class="muted" style="text-align:center">Il risultato vale quando l\'altra coppia lo conferma.</p>' : ""}`;
+}
+function setVince(i, lato){ const g=bozza.giochi[i]; if(g.vince!==lato){ g.vince=lato; g.perde=null; } disegnaFoglio(); }
+function setPerde(i, n){ bozza.giochi[i].perde=n; disegnaFoglio(); }
+async function salvaRisultato(){
+  const giochi = giochiCompleti(), p = bozza.p;
+  const r = await azione({azione: admin() ? "risultato" : "proponi", pid:p.id, giochi}, admin() ? "Risultato salvato" : "Inviato: aspetta la conferma");
+  if (r) chiudiFoglio();
+}
+
+carica(true);
+setInterval(() => { if (!document.hidden) carica(); }, 4000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) carica(); });
+</script>
+</body>
+</html>
