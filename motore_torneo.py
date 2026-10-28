@@ -16,6 +16,9 @@ Regole principali
   il finalista dei vincenti parte con X gol di vantaggio in ogni partita.
 - 3° posto: eliminato nella finale dei perdenti.
 - Ogni modifica di impostazioni vale solo per partite non iniziate.
+- Presenze: una partita può essere messa in stand-by; un giocatore può
+  essere segnato come non arrivato (la sua coppia non viene chiamata).
+  In entrambi i casi la chiamata scala alle partite successive.
 """
 
 from __future__ import annotations
@@ -66,6 +69,8 @@ def nuovo_torneo(coppie: list[str], gol: int = 8, biliardini: int = 3,
         "gironi": [],
         "partite": {},             # id -> partita
         "ritirate": [],
+        "sospese": [],             # id partite in stand-by
+        "assenti": {},             # coppia -> giocatori non ancora arrivati
         "podio": None,
     }
 
@@ -190,6 +195,8 @@ def avvia(t: dict, pid: str, biliardino: int | None = None) -> None:
     vant = c["vantaggio_finale"] if p["tab"] == "F" else 0
     p["regole"] = {"gol": c["gol"], "al_meglio_di": _al_meglio_di(t, p), "vantaggio_a": vant}
     p["stato"], p["biliardino"] = "in_corso", biliardino
+    if pid in t.get("sospese", []):            # avvio esplicito = fine stand-by
+        t["sospese"].remove(pid)
 
 
 def registra(t: dict, pid: str, giochi: list[tuple[int, int]]) -> None:
@@ -221,6 +228,8 @@ def registra(t: dict, pid: str, giochi: list[tuple[int, int]]) -> None:
     p["giochi"] = [list(g) for g in giochi]
     p["vincitore"], p["perdente"] = (p["a"], p["b"]) if va > vb else (p["b"], p["a"])
     p["stato"], p["tavolino"] = "finita", False
+    if pid in t.get("sospese", []):
+        t["sospese"].remove(pid)
     _avanza(t)
 
 
@@ -484,14 +493,71 @@ def _avanza(t):
         t["fase"] = "finito"
 
 
+# ---------------------------------------------------------------- presenze
+
+
+def _rimetti_in_attesa(p) -> int | None:
+    """Partita chiamata ma non giocata: libera il biliardino. Ritorna quale."""
+    if p["stato"] != "in_corso":
+        return None
+    b = p["biliardino"]
+    p["stato"], p["biliardino"], p["regole"] = "attesa", None, None
+    return b
+
+
+def sospendi(t: dict, pid: str) -> int | None:
+    """Stand-by: la partita non viene chiamata finché non si riattiva.
+    Se era in campo libera il biliardino (ritorna il numero)."""
+    p = t["partite"][pid]
+    if p["stato"] == "finita":
+        raise ValueError("Partita già conclusa")
+    sosp = t.setdefault("sospese", [])
+    if pid not in sosp:
+        sosp.append(pid)
+    return _rimetti_in_attesa(p)
+
+
+def riattiva(t: dict, pid: str) -> None:
+    if pid in t.get("sospese", []):
+        t["sospese"].remove(pid)
+
+
+def segna_assente(t: dict, coppia: str, giocatore: str, assente: bool = True) -> int | None:
+    """Giocatore non ancora arrivato: la coppia non viene chiamata. Se era in
+    campo, la partita torna in attesa e il biliardino si libera."""
+    if coppia not in t["coppie"]:
+        raise ValueError("Coppia sconosciuta")
+    ass = t.setdefault("assenti", {})
+    lista = ass.setdefault(coppia, [])
+    if assente and giocatore not in lista:
+        lista.append(giocatore)
+    if not assente and giocatore in lista:
+        lista.remove(giocatore)
+    if not lista:
+        ass.pop(coppia)
+        return None
+    for p in t["partite"].values():
+        if p["stato"] == "in_corso" and coppia in (p["a"], p["b"]):
+            return _rimetti_in_attesa(p)
+    return None
+
+
+def coppie_bloccate(t: dict) -> set:
+    return {c for c, g in t.get("assenti", {}).items() if g}
+
+
 # ---------------------------------------------------------------- chiamata partite
 
 
 def partite_pronte(t: dict) -> list[dict]:
-    """Partite giocabili subito, in ordine di priorità, senza coppie impegnate."""
+    """Partite giocabili subito, in ordine di priorità, senza coppie impegnate,
+    escluse quelle in stand-by e quelle con un giocatore non arrivato."""
     impegnate = {c for p in t["partite"].values() if p["stato"] == "in_corso" for c in (p["a"], p["b"])}
-    pronte, usate = [], set(impegnate)
+    pronte, usate = [], set(impegnate) | coppie_bloccate(t)
+    sospese = set(t.get("sospese", []))
     for p in sorted(t["partite"].values(), key=lambda x: x["ordine"]):
+        if p["id"] in sospese:
+            continue
         if p["stato"] == "attesa" and _pronta(p) and not {p["a"], p["b"]} & usate:
             pronte.append(p)
             usate |= {p["a"], p["b"]}

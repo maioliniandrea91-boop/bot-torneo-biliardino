@@ -118,16 +118,23 @@ function campo(){
     h += p ? `<div class="tav"><div class="n"><small>BILIARDINO</small>${b}</div><div><div class="lab">${esc(p.etichetta)}${p.regole.al_meglio_di===3?" · 2 su 3":""}${p.regole.vantaggio_a?` · +${p.regole.vantaggio_a} ${esc(p.a)}`:""}</div><div class="vs">${esc(p.a)}<span>vs</span>${esc(p.b)}</div></div></div>`
            : `<div class="tav libero"><div class="n"><small>BILIARDINO</small>${b}</div><div class="vs">Libero</div></div>`;
   }
-  return `<div><h2>In campo</h2><div class="campo">${h}</div></div>`;
+  const ass = Object.entries(S.assenti || {}).flatMap(([c, gs]) => gs.map(g => `${esc(g)} <span class="lab">(${esc(c)})</span>`));
+  const nSosp = (S.sospese || []).length;
+  const attesa = ass.length || nSosp ? `<div class="box lista"><h2>In attesa</h2>${ass.length ? `<div class="r"><span>⏳ ${ass.join(", ")}</span></div>` : ""}${nSosp ? `<div class="r"><span class="lab">${nSosp} ${nSosp === 1 ? "partita" : "partite"} in stand-by</span></div>` : ""}</div>` : "";
+  return `<div><h2>In campo</h2><div class="campo">${h}</div></div>${attesa}`;
 }
+const inAttesa = () => (S.sospese||[]).length || Object.keys(S.assenti||{}).length;
 function prossime(){
-  const ps = S.partite.filter(p => p.stato === "attesa" && p.a && p.b && !p.bye).slice(0, 4);
+  const ferme = p => (S.sospese||[]).includes(p.id) || ((S.assenti||{})[p.a]||[]).length || ((S.assenti||{})[p.b]||[]).length;
+  const pronte = S.pronte.map(id => S.partite.find(p => p.id === id));
+  const altre = S.partite.filter(p => p.stato === "attesa" && p.a && p.b && !p.bye && !S.pronte.includes(p.id) && !ferme(p));
+  const ps = [...pronte, ...altre].slice(0, inAttesa() ? 3 : 4);
   if (!ps.length) return "";
   return `<div class="box lista"><h2>Prossime</h2>${ps.map(p=>`<div class="r"><span>${esc(p.a)} <span class="lab">vs</span> ${esc(p.b)}</span><span class="s lab">${esc(p.etichetta.replace("Girone ","").replace(" · giornata "," g"))}</span></div>`).join("")}</div>`;
 }
 function ultimi(){
   const ps = S.partite.filter(p => p.stato === "finita" && !p.bye)
-    .sort((a,b) => (a.finita_il||"").localeCompare(b.finita_il||"")).slice(-4).reverse();
+    .sort((a,b) => (a.finita_il||"").localeCompare(b.finita_il||"")).slice(inAttesa() ? -2 : -4).reverse();
   if (!ps.length) return "";
   return `<div class="box lista"><h2>Ultimi risultati</h2>${ps.map(p=>`<div class="r"><span><span class="${p.vincitore===p.a?"w":""}">${esc(p.a)}</span> <span class="lab">vs</span> <span class="${p.vincitore===p.b?"w":""}">${esc(p.b)}</span></span><span class="s">${sc(p)}</span></div>`).join("")}</div>`;
 }

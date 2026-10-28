@@ -132,6 +132,9 @@ async function azione(dati, okMsg){
 const admin = () => S.ruolo && S.ruolo.admin;
 const mie = () => (S.ruolo && S.ruolo.coppie) || [];
 const eMia = p => mie().includes(p.a) || mie().includes(p.b);
+const sospesa = p => (S.sospese || []).includes(p.id);
+const mancanti = c => ((S.assenti || {})[c] || []);
+const bloccata = p => mancanti(p.a).length || mancanti(p.b).length;
 function punteggio(p){
   if (!p.giochi.length) return "";
   if (p.giochi.length === 1) return `${p.giochi[0][0]}–${p.giochi[0][1]}`;
@@ -151,6 +154,8 @@ function cardPartita(p, conAzioni=true){
   if (p.stato === "in_corso") tags.push(`<span class="pill live">Biliardino ${p.biliardino}</span>`);
   if (eMia(p)) tags.push('<span class="pill mine">Tua</span>');
   if (p.tavolino) tags.push('<span class="pill">Tavolino</span>');
+  if (!fin && sospesa(p)) tags.push('<span class="pill warn">Stand-by</span>');
+  if (!fin) [...mancanti(p.a), ...mancanti(p.b)].forEach(g => tags.push(`<span class="pill warn">Manca ${esc(g)}</span>`));
   if (p.proposta) tags.push(p.proposta.contestata ? '<span class="pill warn">Contestato</span>' : '<span class="pill warn">Da confermare</span>');
   const f = formatoTesto(p);
   let az = "";
@@ -167,7 +172,11 @@ function cardPartita(p, conAzioni=true){
     if (admin()){
       if (p.stato === "attesa" && S.pronte.includes(p.id))
         S.biliardini_liberi.forEach(b => btn.push(`<button class="b" onclick="avvia('${p.id}',${b})">▶ Biliardino ${b}</button>`));
-      if (p.stato === "in_corso") btn.push(`<button class="b" onclick="ferma('${p.id}')">Ferma</button>`);
+      if (!fin && S.fase !== "finito"){
+        btn.push(sospesa(p) ? `<button class="b" onclick="riattiva('${p.id}')">▶ Riattiva</button>`
+                            : `<button class="b" onclick="sospendi('${p.id}')">⏸ Stand-by</button>`);
+        btn.push(`<button class="b" onclick="apriPresenze('${p.id}')">🚶 Chi manca?</button>`);
+      }
       const correggibile = p.tab !== "G" || S.fase === "gironi";
       if (correggibile) btn.push(`<button class="b ${p.stato==="in_corso"||prop?"pri":""}" onclick="apriRisultato('${p.id}')">${fin ? "Correggi" : "Risultato"}</button>`);
     }
@@ -205,6 +214,10 @@ function vPartite(){
   const P = S.partite.filter(p => !p.bye);
   let h = "";
   if (S.fase === "finito" && S.podio) h += vPodio();
+  if (admin() && S.fase !== "finito"){
+    const ass = Object.entries(S.assenti || {}).flatMap(([c, gs]) => gs.map(g => [c, g]));
+    if (ass.length) h += `<section><h2>Non ancora arrivati</h2><div class="card">${ass.map(([c,g]) => `<div class="row"><span><b>${esc(g)}</b> <span class="muted">${esc(c)}</span></span><button class="b pri" onclick="presenza(${jsq(c)},${jsq(g)},false)">È arrivato</button></div>`).join("")}</div></section>`;
+  }
   const daConfermare = P.filter(p => p.proposta && p.stato !== "finita" && (admin() ? p.proposta.contestata : (eMia(p) && !mie().includes(p.proposta.da))));
   if (daConfermare.length) h += `<section><h2>${admin() ? "Contestati: decidi tu" : "Da confermare"}</h2>${daConfermare.map(p=>cardPartita(p)).join("")}</section>`;
   const mieP = P.filter(p => eMia(p) && p.stato !== "finita" && !daConfermare.includes(p));
@@ -212,9 +225,11 @@ function vPartite(){
   const inCorso = P.filter(p => p.stato === "in_corso" && !mieP.includes(p) && !daConfermare.includes(p));
   if (inCorso.length) h += `<section><h2>In campo</h2>${inCorso.map(p=>cardPartita(p)).join("")}</section>`;
   if (admin() && S.fase !== "finito") h += `<section><button class="b pri big" onclick="chiama()" ${S.biliardini_liberi.length && S.pronte.length ? "" : "disabled"}>📣 Chiama partite (${S.biliardini_liberi.length} biliardini liberi)</button></section>`;
+  const standby = P.filter(p => p.stato !== "finita" && (sospesa(p) || bloccata(p)) && !mieP.includes(p) && !daConfermare.includes(p) && !inCorso.includes(p));
+  if (standby.length) h += `<section><h2>In stand-by / manca qualcuno</h2>${standby.map(p=>cardPartita(p)).join("")}</section>`;
   const pronte = P.filter(p => S.pronte.includes(p.id) && !mieP.includes(p) && !daConfermare.includes(p));
   if (pronte.length) h += `<section><h2>Prossime</h2>${pronte.map(p=>cardPartita(p)).join("")}</section>`;
-  const attesa = P.filter(p => p.stato === "attesa" && p.a && p.b && !S.pronte.includes(p.id) && !mieP.includes(p) && !daConfermare.includes(p));
+  const attesa = P.filter(p => p.stato === "attesa" && p.a && p.b && !S.pronte.includes(p.id) && !mieP.includes(p) && !daConfermare.includes(p) && !standby.includes(p));
   if (attesa.length) h += `<section><h2>Da giocare</h2>${attesa.map(p=>cardPartita(p)).join("")}</section>`;
   const giocate = P.filter(p => p.stato === "finita").reverse();
   if (giocate.length) h += `<section><h2>Giocate</h2>${giocate.map(p=>cardPartita(p, admin())).join("")}</section>`;
@@ -278,7 +293,13 @@ function vAdmin(){
     const mancano = S.partite.filter(p=>p.tab==="G" && p.stato!=="finita").length;
     h += `<section><button class="b pri big" onclick="tabellone()" ${mancano?"disabled":""}>Crea tabellone doppio KO</button><p class="muted" style="margin:8px 6px">${mancano ? `Mancano ${mancano} partite dei gironi.` : "Gironi conclusi: crea il tabellone. Dopo non si possono più correggere i gironi."}</p></section>`;
   }
-  if (S.fase !== "finito") h += impostazioni();
+  if (S.fase !== "finito"){
+    h += `<section><h2>Presenze</h2><div class="card">${S.coppie.filter(c=>!S.ritirate.includes(c)).map(c => `<div class="row"><span class="muted">${esc(c)}</span><span style="display:flex;gap:6px">${S.giocatori[c].map(g => {
+      const manca = mancanti(c).includes(g);
+      return `<button class="b ${manca?"red":""}" onclick="presenza(${jsq(c)},${jsq(g)},${!manca})">${manca?"✗":"✓"} ${esc(g)}</button>`; }).join("")}</span></div>`).join("")}</div>
+      <p class="muted" style="margin:8px 6px">Tocca un giocatore per segnarlo assente: la sua coppia non viene chiamata e il campo passa alla partita successiva.</p></section>`;
+    h += impostazioni();
+  }
   if (S.formati && S.fase === "ko"){
     h += `<section><h2>Formato per turno</h2><div class="card">${Object.entries(S.formati).map(([k,v])=>`<div class="row"><span>${esc(nomeTurno(k))}</span><div class="seg" style="width:170px"><button class="${v===1?"on":""}" onclick="formato('${k}',1)">Secca</button><button class="${v===3?"on":""}" onclick="formato('${k}',3)">2 su 3</button></div></div>`).join("")}</div><p class="muted" style="margin:8px 6px">Si può cambiare solo per i turni non ancora iniziati.</p></section>`;
   }
@@ -334,6 +355,27 @@ async function ricomincia(){ if (await chiedi("Cancello gironi, tabellone e risu
 async function chiama(){ const r = await azione({azione:"chiama"}); if (r) toast(`Chiamate ${r.chiamate.length} partite`); }
 async function avvia(pid,b){ await azione({azione:"avvia", pid, biliardino:b}, `Avviata sul biliardino ${b}`); }
 async function ferma(pid){ await azione({azione:"ferma", pid}); }
+const jsq = v => esc(JSON.stringify(v));
+async function sospendi(pid){ const r = await azione({azione:"sospendi", pid}, "Partita in stand-by"); if (r && r.chiamate) toast("Campo passato alla partita successiva"); }
+async function riattiva(pid){ await azione({azione:"riattiva", pid}, "Partita riattivata"); }
+async function presenza(coppia, giocatore, assente){
+  const r = await azione({azione:"assente", coppia, giocatore, assente}, assente ? `${giocatore}: non arrivato` : `${giocatore} è arrivato`);
+  if (r && r.chiamate) toast("Campo passato alla partita successiva");
+  if (foglioAperto && bozza.presenze) disegnaPresenze();
+}
+function apriPresenze(pid){
+  bozza = {presenze: pid}; foglioAperto = true; disegnaPresenze();
+  $("#veil").classList.add("on"); $("#sheet").classList.add("on");
+}
+function disegnaPresenze(){
+  const p = S.partite.find(x => x.id === bozza.presenze);
+  const righe = [p.a, p.b].map(c => `<div class="row" style="display:block"><div class="muted" style="margin-bottom:6px">${esc(c)}</div><div class="who" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${S.giocatori[c].map(g => {
+    const manca = mancanti(c).includes(g);
+    return `<button class="b ${manca?"red":""}" onclick="presenza(${jsq(c)},${jsq(g)},${!manca})">${manca ? "✗ Non arrivato" : "✓ Presente"} · ${esc(g)}</button>`; }).join("")}</div></div>`).join("");
+  $("#sheet").innerHTML = `<div class="muted">${esc(p.etichetta)}</div><div style="font-weight:700;margin:4px 0 8px">Chi manca?</div>${righe}
+    <p class="muted">La coppia con un assente non viene chiamata: il campo passa alla partita successiva. Quando arriva, tocca di nuovo.</p>
+    <button class="b big" onclick="chiudiFoglio()">Chiudi</button>`;
+}
 async function conferma(pid){ await azione({azione:"conferma", pid}, "Risultato confermato"); }
 async function contesta(pid){ if (await chiedi("Contesti il risultato? Deciderà l'admin.")) await azione({azione:"contesta", pid}, "Segnalato all'admin"); }
 function copia(){ navigator.clipboard?.writeText(S.url_tv).then(()=>toast("Link copiato"), ()=>toast("Copia non riuscita", true)); }

@@ -86,6 +86,14 @@ def crea_tabelle(conn):
             annullata INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # account Telegram collegato a un giocatore (/sonoio): uno a uno
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS giocatori_telegram (
+            giocatore_id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL UNIQUE,
+            collegato_il TEXT NOT NULL
+        )
+    """)
     colonne = [r[1] for r in conn.execute("PRAGMA table_info(tornei)")]
     if "escluso_medagliere" not in colonne:
         # NULL = automatico (5X escluso), 1 = escluso a mano, 0 = incluso a mano
@@ -574,6 +582,9 @@ async def unisci(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for col in ("a1", "a2", "b1", "b2"):
             conn.execute(f"UPDATE sfide SET {col} = ? WHERE {col} = ?", (gid, did))
         conn.execute("UPDATE giocatori_alias SET giocatore_id = ? WHERE giocatore_id = ?", (gid, did))
+        # account Telegram del doppione: passa al giusto se questo non ne ha già uno
+        conn.execute("UPDATE OR IGNORE giocatori_telegram SET giocatore_id = ? WHERE giocatore_id = ?", (gid, did))
+        conn.execute("DELETE FROM giocatori_telegram WHERE giocatore_id = ?", (did,))
         conn.execute("DELETE FROM giocatori WHERE id = ?", (did,))
     else:
         # nome mai registrato (es. scritto solo in un vecchio podio): diventa soprannome

@@ -98,6 +98,44 @@ async def main(n_coppie=11, n_gironi=3):
     rng = random.Random(4)
     gol = s["config"]["gol"]
 
+    # ---- /sonoio: il compagno (account 900) gestisce la coppia 0
+    c0 = coppie[0]
+    secondo = c0.split("-")[1]
+    ok, msg = A.collega(A._conn(), 900, secondo)
+    assert ok, msg
+    assert not A.collega(A._conn(), 901, secondo)[0]          # già preso da 900
+    assert c0 in (await stato(900))["ruolo"]["coppie"]
+    utente_extra = {c0: 900}
+
+    # ---- stand-by e assenti
+    st, r = await az(ADMIN, azione="chiama")
+    assert st == 200, r
+    s = await stato()
+    in_campo = [p for p in s["partite"] if p["stato"] == "in_corso"]
+    p1 = in_campo[0]
+    st, r = await az(ADMIN, azione="sospendi", pid=p1["id"])
+    assert st == 200, r
+    s = await stato()
+    q = {p["id"]: p for p in s["partite"]}
+    assert q[p1["id"]]["stato"] == "attesa" and p1["id"] in s["sospese"]
+    nuova = [p for p in s["partite"] if p["stato"] == "in_corso" and p["biliardino"] == p1["biliardino"]]
+    assert nuova and nuova[0]["id"] != p1["id"], "il campo doveva passare alla partita dopo"
+    p2 = nuova[0]
+    assente = p2["a"]
+    st, r = await az(ADMIN, azione="assente", coppia=assente, giocatore=assente.split("-")[0])
+    assert st == 200, r
+    s = await stato()
+    assert all(assente not in (p["a"], p["b"]) for p in s["partite"] if p["stato"] == "in_corso")
+    assert all(p["id"] != p1["id"] for p in s["partite"] if p["stato"] == "in_corso")
+    await az(ADMIN, azione="chiama")
+    s = await stato()
+    assert all(assente not in (p["a"], p["b"]) for p in s["partite"] if p["stato"] == "in_corso")
+    await az(ADMIN, azione="assente", coppia=assente, giocatore=assente.split("-")[0], assente=False)
+    await az(ADMIN, azione="riattiva", pid=p1["id"])
+    s = await stato()
+    assert not s["assenti"] and not s["sospese"]
+    print("stand-by, assenti e /sonoio ok")
+
     def punteggio(bo, vant=0):
         """Punteggi reali: in finale il punteggio di 'a' parte dal vantaggio."""
         serve, va, vb, g = bo // 2 + 1, 0, 0, []
@@ -132,7 +170,8 @@ async def main(n_coppie=11, n_gironi=3):
             elif modo in (1, 2):     # coppia A propone, B conferma
                 estraneo = next(u for c, u in utente.items() if c not in (p["a"], p["b"]))
                 assert (await az(estraneo, azione="proponi", pid=p["id"], giochi=g))[0] == 403
-                st, r = await az(utente[p["a"]], azione="proponi", pid=p["id"], giochi=g)
+                chi = utente_extra.get(p["a"], utente[p["a"]])     # il compagno da /sonoio
+                st, r = await az(chi, azione="proponi", pid=p["id"], giochi=g)
                 assert st == 200, (r, p, g)
                 st2, r2 = await az(utente[p["a"]], azione="conferma", pid=p["id"])
                 assert st2 == 400                        # non può confermare da sola

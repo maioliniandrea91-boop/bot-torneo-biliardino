@@ -13,7 +13,8 @@ ARCHITETTURA
 ACCESSO
 - Mini App: Telegram firma i dati dell'utente (initData); il server verifica
   la firma col token del bot. Admin = ADMIN_IDS del bot.
-- Coppia = l'utente Telegram che l'ha iscritta con /iscrivi (squadre.user_id).
+- Coppia = chi l'ha iscritta con /iscrivi (squadre.user_id) + gli account
+  collegati ai due giocatori con /sonoio (vale per tutti i tornei futuri).
 - TV: link con token segreto (/tv), sola lettura, nessun login.
 
 VARIABILI D'AMBIENTE
@@ -23,6 +24,8 @@ VARIABILI D'AMBIENTE
 COMANDI
 - /app  -> apre la Mini App (in privato bottone diretto; nel gruppo rimanda
            alla chat privata col bot)
+- /sonoio Nome  -> collega il proprio account al giocatore Nome
+- /scollega Nome -> (admin) toglie il collegamento di un giocatore
 - /tv   -> (admin, in privato) link della pagina TV; "/tv nuovo" lo rigenera
 """
 
@@ -64,7 +67,7 @@ CHIAVE_TV = "app_tv_token"
 
 AZIONI_ADMIN = {"prepara", "anteprima_gironi", "crea_gironi", "imposta", "formato",
                 "avvia", "ferma", "chiama", "risultato", "ritira", "crea_tabellone",
-                "ricomincia"}
+                "ricomincia", "sospendi", "riattiva", "assente"}
 AZIONI_COPPIA = {"proponi", "conferma", "contesta"}
 
 _db_connect = None
@@ -148,11 +151,31 @@ def squadre_iscritte(conn, torneo_id: int) -> list[tuple[str, int]]:
     ).fetchall()
 
 
+def mappa_utenti(conn, s: dict) -> dict[str, set[int]]:
+    """Coppia -> account Telegram che la gestiscono: chi l'ha iscritta +
+    account collegati ai due giocatori con /sonoio. Un admin che ha iscritto
+    coppie altrui non ne diventa 'membro' (gestisce già tutto da admin e non
+    deve ricevere gli avvisi di ogni chiamata)."""
+    collegati = dict(conn.execute("SELECT giocatore_id, user_id FROM giocatori_telegram").fetchall())
+    coppie = s["t"]["coppie"] if s["t"] else [n for n, _ in squadre_iscritte(conn, s["torneo_id"])]
+    mappa = {}
+    for c in coppie:
+        isc = s["utenti"].get(c)
+        utenti = {isc} if isc is not None and not _is_admin(isc) else set()
+        for g in statistiche.dividi_coppia(c) or []:
+            row = statistiche.cerca_giocatore(conn, g)
+            if row and row[0] in collegati:
+                utenti.add(collegati[row[0]])
+        mappa[c] = utenti
+    return mappa
+
+
 def _versione_globale(conn, s: dict) -> str:
     """Cambia a ogni salvataggio, al cambio di torneo e, prima che l'app sia
     preparata, a ogni nuova iscrizione."""
+    link = conn.execute("SELECT COUNT(*), MAX(collegato_il) FROM giocatori_telegram").fetchone()
     if s["t"] is not None:
-        return f'{s["torneo_id"]}:{s["versione"]}'
+        return f'{s["torneo_id"]}:{s["versione"]}:{link[0]}{link[1]}'
     n = conn.execute("SELECT COUNT(*), MAX(id) FROM squadre WHERE torneo_id = ?",
                      (s["torneo_id"],)).fetchone() if s["torneo_id"] else (0, 0)
     return f'{s["torneo_id"]}:i{n[0]}-{n[1]}'
@@ -246,12 +269,14 @@ def vista(s: dict, uid: int | None = None) -> dict:
            "fase": t["fase"] if t else "nessuna", "url_tv": None}
     if uid is not None:
         out["ruolo"] = {"admin": bool(_is_admin(uid)),
-                        "coppie": sorted(c for c, u in s["utenti"].items() if u == uid)}
+                        "coppie": sorted(c for c, u in s.get("accessi", {}).items() if uid in u)}
     if t is None:
         return out
     out.update({
         "config": t["config"], "coppie": t["coppie"], "ritirate": t["ritirate"],
         "podio": t["podio"], "seme": t["seme"],
+        "sospese": t.get("sospese", []), "assenti": t.get("assenti", {}),
+        "giocatori": {c: statistiche.dividi_coppia(c) or [c] for c in t["coppie"]},
     })
     out["gironi"] = [
         {"nome": f"Girone {NOMI_GIRONI[gi]}", "classifica": M.classifica_girone(t, gi)}
@@ -305,7 +330,7 @@ def _giochi(d) -> list[tuple[int, int]]:
 
 def _coppia_di(s: dict, uid: int, p: dict) -> str | None:
     for lato in ("a", "b"):
-        if p[lato] and s["utenti"].get(p[lato]) == uid:
+        if p[lato] and uid in s["accessi"].get(p[lato], ()):
             return p[lato]
     return None
 
@@ -322,6 +347,7 @@ def esegui(conn, uid: int, d: dict) -> dict:
     s = carica(conn)
     if s["torneo_id"] is None:
         raise ValueError("Nessun torneo attivo")
+    s["accessi"] = mappa_utenti(conn, s)
     if az == "prepara":
         return _prepara(conn, s)
     if s["t"] is None:
@@ -383,6 +409,23 @@ def esegui(conn, uid: int, d: dict) -> dict:
             raise ValueError("La partita non è in corso")
         p["stato"], p["biliardino"], p["regole"] = "attesa", None, None
 
+    elif az in ("sospendi", "riattiva", "assente"):
+        if t["fase"] not in ("gironi", "ko"):
+            raise ValueError("Torneo non in corso")
+        if az == "sospendi":
+            libero = M.sospendi(t, d["pid"])
+        elif az == "riattiva":
+            M.riattiva(t, d["pid"])
+            libero = None
+        else:
+            libero = M.segna_assente(t, d["coppia"], d["giocatore"], bool(d.get("assente", True)))
+        if libero:   # il campo liberato passa subito alla prossima partita pronta
+            pronte = M.partite_pronte(t)
+            if pronte:
+                M.avvia(t, pronte[0]["id"], libero)
+                risposta["chiamate"] = [pronte[0]["id"]]
+                risposta["avvisi"] += _avvisi_chiamata(s, [pronte[0]])
+
     elif az == "chiama":
         chiamate = M.chiama_partite(t)
         if not chiamate:
@@ -432,10 +475,10 @@ def esegui(conn, uid: int, d: dict) -> dict:
             else:
                 proposte[p["id"]] = {"giochi": [list(g) for g in giochi], "da": mia,
                                      "contestata": False, "quando": datetime.now().isoformat()}
-                u = s["utenti"].get(altra)
-                if u and u != uid:
-                    risposta["avvisi"].append((u, f"🎱 {mia} ha inserito il risultato contro di voi: "
-                                                  f"{_testo_giochi(giochi)}. Confermalo nell'app."))
+                for u in s["accessi"].get(altra, ()):
+                    if u != uid:
+                        risposta["avvisi"].append((u, f"🎱 {mia} ha inserito il risultato contro di voi: "
+                                                      f"{_testo_giochi(giochi)}. Confermalo nell'app."))
         elif az == "conferma":
             if not prop or prop["da"] != altra:
                 raise ValueError("Nessun risultato dell'altra coppia da confermare")
@@ -489,8 +532,7 @@ def _avvisi_chiamata(s, partite) -> list:
     avvisi = []
     for p in partite:
         for c, avv in ((p["a"], p["b"]), (p["b"], p["a"])):
-            u = s["utenti"].get(c)
-            if u:
+            for u in s["accessi"].get(c, ()):
                 avvisi.append((u, f"🎱 Tocca a voi! {c} contro {avv} — biliardino {p['biliardino']}"))
     return avvisi
 
@@ -571,6 +613,8 @@ async def h_stato(req):
     versione = _versione_globale(conn, s)
     if req.query.get("v") == versione:
         return web.json_response({"invariato": True}, headers=NO_CACHE)
+    if s["torneo_id"]:
+        s["accessi"] = mappa_utenti(conn, s)
     v = vista(s, uid)
     v["versione"] = versione
     if s["t"] is None and s["torneo_id"]:
@@ -694,8 +738,64 @@ async def cmd_tv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Chi ha il link vede il tabellone. Per invalidarlo: /tv nuovo")
 
 
+def collega(conn, user_id: int, nome: str) -> tuple[bool, str]:
+    """/sonoio: collega l'account al giocatore. Ritorna (ok, messaggio)."""
+    g = statistiche.cerca_giocatore(conn, nome)
+    if not g:
+        return False, (f"Giocatore «{nome}» non trovato. Scrivi il nome come nelle iscrizioni "
+                       "(es. /sonoio Luca); l'elenco è in /giocatori.")
+    gid, gnome = g
+    occupato = conn.execute("SELECT user_id FROM giocatori_telegram WHERE giocatore_id = ?", (gid,)).fetchone()
+    if occupato and occupato[0] != user_id:
+        return False, f"«{gnome}» è già collegato a un altro account. Se è un errore chiedi all'admin (/scollega {gnome})."
+    if occupato:
+        return True, f"Sei già collegato come «{gnome}»."
+    precedente = conn.execute(
+        "SELECT g.nome FROM giocatori_telegram t JOIN giocatori g ON g.id = t.giocatore_id WHERE t.user_id = ?",
+        (user_id,)).fetchone()
+    conn.execute("DELETE FROM giocatori_telegram WHERE user_id = ?", (user_id,))
+    conn.execute("INSERT INTO giocatori_telegram (giocatore_id, user_id, collegato_il) VALUES (?, ?, ?)",
+                 (gid, user_id, datetime.now().isoformat()))
+    conn.commit()
+    extra = f" (prima eri «{precedente[0]}»)" if precedente else ""
+    return True, (f"✅ Ora sei «{gnome}»{extra}: nell'app puoi inserire e confermare i risultati "
+                  "di ogni coppia in cui giochi.")
+
+
+async def cmd_sonoio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = _conn()
+    uid = update.effective_user.id
+    nome = " ".join(context.args or []).strip()
+    if not nome:
+        row = conn.execute(
+            "SELECT g.nome FROM giocatori_telegram t JOIN giocatori g ON g.id = t.giocatore_id "
+            "WHERE t.user_id = ?", (uid,)).fetchone()
+        stato = f"Sei collegato come «{row[0]}»." if row else "Non sei ancora collegato a nessun giocatore."
+        await _rispondi(update, context, f"{stato}\nUso: /sonoio TuoNome (come nelle iscrizioni, es. /sonoio Luca)")
+        return
+    _, msg = collega(conn, uid, nome)
+    await _rispondi(update, context, msg)
+
+
+async def cmd_scollega(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        await _rispondi(update, context, "Comando riservato agli admin.")
+        return
+    conn = _conn()
+    nome = " ".join(context.args or []).strip()
+    g = statistiche.cerca_giocatore(conn, nome) if nome else None
+    if not g:
+        await _rispondi(update, context, "Uso: /scollega Nome (giocatore esistente, vedi /giocatori)")
+        return
+    n = conn.execute("DELETE FROM giocatori_telegram WHERE giocatore_id = ?", (g[0],)).rowcount
+    conn.commit()
+    await _rispondi(update, context, f"🔓 «{g[1]}» scollegato." if n else f"«{g[1]}» non era collegato.")
+
+
 COMANDI_APP = [
     ("app", "Apre l'app torneo: gironi, partite, risultati"),
+    ("sonoio", "Collega il tuo account al tuo nome giocatore — es. /sonoio Luca"),
+    ("scollega", "[admin] Toglie il collegamento /sonoio di un giocatore — /scollega Luca"),
     ("tv", "[admin] Link della pagina TV del tabellone (/tv nuovo lo cambia)"),
 ]
 
@@ -706,3 +806,5 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando, token, admin
         db_connect, is_admin, rispondi, cancella_comando, token, set(admin_ids))
     app.add_handler(CommandHandler("app", cmd_app))
     app.add_handler(CommandHandler("tv", cmd_tv))
+    app.add_handler(CommandHandler("sonoio", cmd_sonoio))
+    app.add_handler(CommandHandler("scollega", cmd_scollega))
