@@ -57,11 +57,14 @@ import motore_torneo as M
 import statistiche
 
 CARTELLA_WEB = Path(__file__).parent / "webapp"
+CARTELLA_ASSETS = Path(__file__).parent / "assets"     # font della locandina
 PORTA = int(os.environ.get("PORT", "8080"))
 VALIDITA_INIT_DATA = 24 * 3600          # secondi
 # bonus Elo per medaglie dell'anno in corso (oro, argento, bronzo), solo per
-# le teste di serie: valori provvisori, da decidere
+# le teste di serie. Vale fino a BONUS_FINO_AL: poi le partite dei tornei
+# entrano nell'Elo e il bonus conterebbe due volte le stesse vittorie.
 BONUS_MEDAGLIE = (20, 10, 5)
+BONUS_FINO_AL = 2026
 PROVE_STIMA = 8                          # tornei simulati per la stima durata
 CHIAVE_TV = "app_tv_token"
 
@@ -188,7 +191,7 @@ def forza_coppie(conn, coppie: list[str]) -> dict[str, float]:
     + bonus medaglie dell'anno in corso."""
     anno = date.today().year
     elo = {r["nome"].lower(): r["elo"] for r in statistiche.calcola_classifica(conn, anno)}
-    med, _, _ = statistiche.calcola_medagliere(conn, anno)
+    med = statistiche.calcola_medagliere(conn, anno)[0] if anno <= BONUS_FINO_AL else []
     bonus = {n.lower(): o * BONUS_MEDAGLIE[0] + a * BONUS_MEDAGLIE[1] + b * BONUS_MEDAGLIE[2]
              for n, (o, a, b) in med}
 
@@ -361,6 +364,9 @@ def esegui(conn, uid: int, d: dict) -> dict:
         if d.get("conferma") != "RICOMINCIA":
             raise ValueError("Conferma mancante")
         conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (s["torneo_id"],))
+        if t["fase"] != "iscrizioni":   # i gironi le avevano chiuse: si riaprono
+            conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '1') "
+                         "ON CONFLICT(chiave) DO UPDATE SET valore = '1'")
         conn.commit()
         return risposta
 
@@ -657,6 +663,8 @@ def crea_web_app(bot=None) -> web.Application:
     app.router.add_get("/tv/{token}", h_tv)
     app.router.add_get("/api/stato", h_stato)
     app.router.add_post("/api/azione", h_azione)
+    app.router.add_static("/static/", CARTELLA_WEB)          # mascotte ridotta
+    app.router.add_static("/assets/", CARTELLA_ASSETS)       # font Bebas e Yellowtail
     return app
 
 

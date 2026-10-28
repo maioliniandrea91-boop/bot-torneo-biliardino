@@ -6,13 +6,17 @@
 <title>Torneo biliardino</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
+@font-face{font-family:"Bebas";src:url(/assets/BebasNeue-Regular.ttf) format("truetype");font-display:swap}
+@font-face{font-family:"Yellowtail";src:url(/assets/Yellowtail-Regular.ttf) format("truetype");font-display:swap}
 :root{
+  /* colori della locandina del circolo */
+  --teal:#22bdb7; --magenta:#d4008f; --lime:#b8f53f;
   --bg:var(--tg-theme-bg-color,#fff);
   --bg2:var(--tg-theme-secondary-bg-color,#f1f2f5);
   --tx:var(--tg-theme-text-color,#111);
   --hint:var(--tg-theme-hint-color,#8a8f98);
-  --acc:var(--tg-theme-button-color,#2f7de1);
-  --acc-tx:var(--tg-theme-button-text-color,#fff);
+  --acc:var(--magenta);
+  --acc-tx:#fff;
   --link:var(--tg-theme-link-color,#2f7de1);
   --red:var(--tg-theme-destructive-text-color,#e5484d);
   --ok:#2e9f5b; --warn:#d98a00;
@@ -21,9 +25,13 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:var(--bg2);color:var(--tx);font:15px/1.35 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(24px + env(safe-area-inset-bottom))}
-header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 16px 0;border-bottom:1px solid var(--line)}
-h1{font-size:18px;margin:0 0 2px;font-weight:700}
-.sub{color:var(--hint);font-size:13px}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand{background:var(--teal);padding:10px 16px 10px 12px;display:flex;align-items:center;gap:10px}
+.brand img{height:46px;width:auto;flex:none;filter:drop-shadow(0 1px 1px rgba(0,0,0,.25))}
+.brand .t{min-width:0}
+h1{font:400 26px/1 "Bebas",Impact,sans-serif;letter-spacing:.02em;margin:0;color:#fff;text-shadow:2px 2px 0 var(--magenta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{color:#08302f;font-size:13px;font-weight:600}
+nav{padding:0 12px}
 nav{display:flex;gap:4px;margin-top:10px;overflow-x:auto;scrollbar-width:none}
 nav button{flex:1;min-width:max-content;border:0;background:none;color:var(--hint);font:600 14px inherit;font-family:inherit;padding:10px 8px;border-bottom:2px solid transparent}
 nav button.on{color:var(--acc);border-color:var(--acc)}
@@ -85,8 +93,9 @@ select{font:inherit;padding:7px 8px;border-radius:9px;border:1px solid var(--lin
 </head>
 <body>
 <header>
-  <h1 id="titolo">Torneo</h1>
-  <div class="sub" id="sottotitolo">Caricamento…</div>
+  <div class="brand"><img src="/static/mascotte.png" alt=""><div class="t">
+    <h1 id="titolo">Torneo</h1>
+    <div class="sub" id="sottotitolo">Caricamento…</div></div></div>
   <nav id="tabs"></nav>
 </header>
 <main id="main"></main>
@@ -351,7 +360,7 @@ async function imposta(k, v, min, max){ if (v<min||v>max) return; prev=null; awa
 async function formato(k, v){ await azione({azione:"formato", turno:k, al_meglio_di:v}); }
 async function tabellone(){ if (await chiedi("Creo il tabellone? I risultati dei gironi non saranno più modificabili.")) { await azione({azione:"crea_tabellone"}, "Tabellone creato"); tab="partite"; render(); } }
 async function ritira(){ const c=$("#selRit").value; if (await chiedi(`Ritirare ${c}? Partite restanti perse a tavolino.`)) await azione({azione:"ritira", coppia:c}, "Coppia ritirata"); }
-async function ricomincia(){ if (await chiedi("Cancello gironi, tabellone e risultati di questo torneo?")) { await azione({azione:"ricomincia", conferma:"RICOMINCIA"}, "Torneo azzerato"); tab=null; } }
+async function ricomincia(){ if (await chiedi("Cancello gironi, tabellone e risultati di questo torneo? Le iscrizioni si riaprono.")) { await azione({azione:"ricomincia", conferma:"RICOMINCIA"}, "Torneo azzerato"); tab=null; } }
 async function chiama(){ const r = await azione({azione:"chiama"}); if (r) toast(`Chiamate ${r.chiamate.length} partite`); }
 async function avvia(pid,b){ await azione({azione:"avvia", pid, biliardino:b}, `Avviata sul biliardino ${b}`); }
 async function ferma(pid){ await azione({azione:"ferma", pid}); }
