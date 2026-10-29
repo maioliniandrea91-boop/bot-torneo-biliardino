@@ -104,7 +104,7 @@ if __name__ == "__main__":
     for bad in [(7, 5), (9, 8), (8, 8)]:
         try:
             M.punti_girone(*bad, 8)
-            print("ERRORE: accettato", bad)
+            raise SystemExit(f"ERRORE: accettato {bad}")
         except ValueError:
             pass
     print("tutti i controlli superati")

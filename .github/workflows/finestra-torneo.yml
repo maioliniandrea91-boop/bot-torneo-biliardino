@@ -1,6 +1,6 @@
-# Blocca i deploy durante il torneo: Railway ("Wait for CI") pubblica solo se
+# Blocca i deploy durante il torneo e se i test falliscono: Railway ("Wait for CI") pubblica solo se
 # questo controllo passa. Finestra vietata: venerdì 20:00 – sabato 05:00 (Roma).
-name: Finestra torneo
+name: Controlli prima del deploy
 on:
   push:
     branches: [main]
@@ -18,3 +18,20 @@ jobs:
             exit 1
           fi
           echo "Fuori dalla finestra del torneo: deploy consentito."
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Dipendenze
+        run: pip install -r requirements.txt
+      - name: Test motore torneo
+        run: python test_motore.py
+      - name: Test app tornei
+        run: python test_app_tornei.py
+      - name: Test funzioni (annulla, PDF, backup…)
+        run: python test_funzioni.py

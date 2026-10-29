@@ -11,4 +11,4 @@
 - Evitare deploy anche mentre Andrea sta facendo prove (chiedere se in dubbio).
 
 ## Test prima di pubblicare
-- `python3 test_motore.py` e `python3 test_app_tornei.py` devono finire senza errori.
+- `python3 test_motore.py`, `python3 test_app_tornei.py` e `python3 test_funzioni.py` devono finire senza errori: li esegue anche il controllo GitHub, e se falliscono Railway non pubblica.
