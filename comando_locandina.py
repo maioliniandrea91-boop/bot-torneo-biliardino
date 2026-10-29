@@ -559,6 +559,28 @@ async def bottoni(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, azione, lid = q.data.split(":")
     lid = int(lid)
 
+    # Avviso se manca il testo aggiunto: "oraok"/"progok" = confermato senza testo
+    if azione in ("ora", "prog"):
+        row = _conn().execute("SELECT extra, stato FROM locandine WHERE id = ?", (lid,)).fetchone()
+        if row and not row[0] and row[1] not in ("pubblicata", "annullata"):
+            await q.message.reply_text(
+                f"⚠️ La locandina n° {lid} non ha testo aggiunto: uscirà solo con la didascalia standard.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✏️ Aggiungi testo", callback_data=f"loc:testo:{lid}")],
+                    [InlineKeyboardButton(
+                        "📢 Pubblica senza testo" if azione == "ora" else "⏰ Programma senza testo",
+                        callback_data=f"loc:{azione}ok:{lid}")],
+                ]),
+            )
+            return
+    if azione in ("oraok", "progok"):
+        await q.edit_message_reply_markup(None)  # toglie i bottoni dell'avviso
+        azione = azione[:-2]
+        if azione == "ora":
+            esito = await _pubblica(context.bot, lid, context.job_queue)
+            await q.message.reply_text(esito)
+            return
+
     if azione == "ora":
         esito = await _pubblica(context.bot, lid, context.job_queue)
         await q.edit_message_reply_markup(None)
