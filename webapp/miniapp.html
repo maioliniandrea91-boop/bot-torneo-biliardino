@@ -75,8 +75,8 @@ select{font:inherit;padding:7px 8px;border-radius:9px;border:1px solid var(--lin
 .empty{text-align:center;color:var(--hint);padding:28px 10px}
 .podio{display:grid;gap:6px}
 .podio div{display:flex;gap:10px;align-items:center;font-weight:700;font-size:17px}
-.toast{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));background:#222;color:#fff;padding:12px 14px;border-radius:12px;font-size:14px;z-index:30;transform:translateY(150%);transition:transform .2s}
-.toast.on{transform:none}.toast.err{background:var(--red)}
+.toast{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));background:#222;color:#fff;padding:12px 14px;border-radius:12px;font-size:14px;z-index:30;transform:translateY(calc(100% + 40px));visibility:hidden;transition:transform .2s,visibility .2s}
+.toast.on{transform:none;visibility:visible}.toast.err{background:var(--red)}
 /* foglio risultato */
 .veil{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:20;display:none}
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:21;background:var(--bg);border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto;transform:translateY(105%);transition:transform .22s}
@@ -93,6 +93,29 @@ select{font:inherit;padding:7px 8px;border-radius:9px;border:1px solid var(--lin
 .prova span{flex:1;min-width:150px}
 .prova button{border:0;border-radius:9px;padding:7px 10px;background:#5c4500;color:#fff;font:600 13px inherit;font-family:inherit}
 .b small{font-weight:500;opacity:.85}
+/* ---- PC (Telegram Desktop / finestre larghe) ---- */
+@media (min-width: 900px){
+  .brand,nav,.prova{padding-left:max(16px,calc((100% - 1280px)/2));padding-right:max(16px,calc((100% - 1280px)/2))}
+  nav button{flex:0 1 200px}
+  main{max-width:1280px;margin:0 auto;padding:16px 16px 0}
+  /* partite: card affiancate */
+  main.v-partite section{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;align-items:start}
+  main.v-partite section>:not(.card){grid-column:1/-1}
+  main.v-partite section>.card{margin:0;height:100%;box-sizing:border-box}
+  /* gironi: classifiche affiancate */
+  main.v-gironi{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:16px;align-items:start}
+  main.v-gironi>p{grid-column:1/-1}
+  /* gestione: due colonne */
+  main.v-admin{column-count:2;column-gap:16px}
+  main.v-admin section{break-inside:avoid}
+  /* tabellone: turni in colonna, uno accanto all'altro */
+  .turni{display:flex;gap:12px;overflow-x:auto;align-items:flex-start;padding-bottom:6px}
+  .turni>section{flex:0 0 270px;margin:0}
+  /* foglio risultato e avvisi: centrati, non larghi quanto lo schermo */
+  .sheet{left:50%;right:auto;width:520px;transform:translate(-50%,105%)}
+  .sheet.on{transform:translate(-50%,0)}
+  .toast{left:50%;right:auto;width:420px;margin-left:-210px}
+}
 </style>
 </head>
 <body>
@@ -229,6 +252,7 @@ function render(){
     : (S.prova ? "<span>🧪 Torneo di prova</span>" : "");
   $("#prova").style.display = S.prova ? "flex" : "none";
   $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
+  $("#main").className = "v-" + tab;
   $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa})[tab]();
 }
 function vai(k){ tab = k; render(); window.scrollTo(0,0); }
@@ -280,7 +304,7 @@ function vTabellone(){
   const ordine = Object.keys(gruppi);
   const W = ordine.filter(k => k.startsWith("Vincenti") || k==="Finale vincenti");
   const L = ordine.filter(k => k.startsWith("Perdenti") || k==="Finale perdenti");
-  const blocco = (titolo, chiavi) => chiavi.length ? `<h2 style="margin-top:14px">${titolo}</h2>` + chiavi.map(k => `<section><h2>${esc(k)} · ${gruppi[k][0].regole.al_meglio_di===3?"2 su 3":"secca"}</h2>${gruppi[k].map(p => p.bye ? `<div class="card match"><div class="team">${esc(p.a==="BYE"?p.b:p.a) || "—"}</div><div class="score"><span class="pill">BYE</span></div></div>` : cardPartita(p, false)).join("")}</section>`).join("") : "";
+  const blocco = (titolo, chiavi) => chiavi.length ? `<h2 style="margin-top:14px">${titolo}</h2><div class="turni">` + chiavi.map(k => `<section><h2>${esc(k)} · ${gruppi[k][0].regole.al_meglio_di===3?"2 su 3":"secca"}</h2>${gruppi[k].map(p => p.bye ? `<div class="card match"><div class="team">${esc(p.a==="BYE"?p.b:p.a) || "—"}</div><div class="score"><span class="pill">BYE</span></div></div>` : cardPartita(p, false)).join("")}</section>`).join("") + "</div>" : "";
   h += blocco("Tabellone vincenti", W) + blocco("Tabellone perdenti", L);
   if (gruppi["Finale"]) h += `<h2 style="margin-top:14px">Finale</h2>` + gruppi["Finale"].map(p=>cardPartita(p,false)).join("");
   return h;
