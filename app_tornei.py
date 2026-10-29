@@ -720,6 +720,23 @@ def _avvisi_chiamata(s, partite) -> list:
     return avvisi
 
 
+def _righe_da_chiamare(avvisata: dict) -> list[str]:
+    """Una riga per partita: «A — B · biliardino N», con le coppie da chiamare
+    (entrambe, oppure solo quella non avvisata)."""
+    righe, fatte = [], set()
+    for (c, avv, b), ok in avvisata.items():
+        chiave = (frozenset((c, avv)), b)
+        if ok or chiave in fatte:
+            continue
+        fatte.add(chiave)
+        if avvisata.get((avv, c, b)) is False:
+            chi = "entrambe"
+        else:
+            chi = f"solo {c}"
+        righe.append(f"• {c} — {avv} · biliardino {b} ({chi})")
+    return righe
+
+
 def _avvisi_admin(s, p, motivo) -> list:
     return [(a, f"⚠️ {p['a']} – {p['b']}: {motivo}. Decidi tu dall'app.",
              {"pid": p["id"], "tipo": "risultato"}) for a in _admin_ids]
@@ -843,10 +860,9 @@ async def h_azione(req):
                 avvisata[meta["chiamata"]] = avvisata.get(meta["chiamata"], False) or ok
         conn.commit()
         await pulisci_messaggi(bot, conn)
-        mancate = [c for c, ok in avvisata.items() if not ok]
-        if mancate:   # A: l'admin sa chi chiamare a voce
-            testo = "📣 Da chiamare a voce (avviso privato non arrivato):\n" + "\n".join(
-                f"• {c} contro {avv} — biliardino {b}" for c, avv, b in mancate)
+        righe = _righe_da_chiamare(avvisata)
+        if righe:   # A: l'admin sa chi chiamare a voce
+            testo = "📣 Da chiamare a voce (avviso privato non arrivato):\n" + "\n".join(righe)
             scade = datetime.now(ZoneInfo("Europe/Rome")) + timedelta(minutes=CANCELLA_DA_CHIAMARE_MIN)
             testo += f"\n\n🕒 Si cancella da solo alle {scade:%H:%M}"
             for a in _admin_ids:
