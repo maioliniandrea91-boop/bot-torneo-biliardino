@@ -323,6 +323,8 @@ function vAdmin(){
     h += `<section><button class="b pri big" onclick="tabellone()" ${mancano?"disabled":""}>Crea tabellone doppio KO</button><p class="muted" style="margin:8px 6px">${mancano ? `Mancano ${mancano} partite dei gironi.` : "Gironi conclusi: crea il tabellone. Dopo non si possono più correggere i gironi."}</p>
       <button class="b big" onclick="annullaGironi()">↩ Torna alla composizione dei gironi</button></section>`;
   }
+  if (S.fase === "ko" || S.fase === "finito")
+    h += `<section><button class="b big" onclick="annullaTabellone()">↩ Torna ai gironi (cancella il tabellone)</button></section>`;
   if (S.fase !== "finito"){
     h += `<section><h2>Presenze</h2><div class="card">${S.coppie.filter(c=>!S.ritirate.includes(c)).map(c => `<div class="row"><span class="muted">${esc(c)}</span><span style="display:flex;gap:6px">${S.giocatori[c].map(g => {
       const manca = mancanti(c).includes(g);
@@ -374,6 +376,14 @@ async function anteprima(rimescola){
 }
 async function creaGironi(){
   if (await azione({azione:"crea_gironi", ...datiGironi()}, "Gironi creati")){ prev=null; tab="partite"; render(); }
+}
+async function annullaTabellone(){
+  const giocate = S.partite.filter(p => p.tab!=="G" && p.stato==="finita" && !p.bye).length;
+  const msg = "Torno ai gironi? Il tabellone doppio KO viene cancellato" +
+    (giocate ? ` e si perdono ${giocate} risultati del tabellone` : "") +
+    (S.podio ? " e il podio" : "") + ". I risultati dei gironi restano e tornano correggibili.";
+  if (!await chiedi(msg)) return;
+  if (await azione({azione:"annulla_tabellone"}, "Tabellone cancellato: sei ai gironi")){ tab="admin"; render(); }
 }
 async function annullaGironi(){
   const giocate = S.partite.filter(p => p.tab==="G" && p.stato==="finita" && !p.tavolino).length;

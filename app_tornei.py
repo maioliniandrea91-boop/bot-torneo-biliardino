@@ -85,7 +85,7 @@ NOMI_PROVA = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "H
 AZIONI_ADMIN = {"prepara", "anteprima_gironi", "crea_gironi", "imposta", "formato",
                 "avvia", "ferma", "chiama", "risultato", "ritira", "crea_tabellone",
                 "ricomincia", "sospendi", "riattiva", "assente", "simula",
-                "annulla_gironi"}
+                "annulla_gironi", "annulla_tabellone"}
 AZIONI_COPPIA = {"proponi", "conferma", "contesta"}
 
 _db_connect = None
@@ -461,6 +461,10 @@ def esegui(conn, uid: int, d: dict) -> dict:
 
     elif az == "simula":
         _simula_prova(t, proposte, s)
+
+    elif az == "annulla_tabellone":
+        M.annulla_tabellone(t)
+        proposte = {k: v for k, v in proposte.items() if k in t["partite"]}
 
     elif az == "annulla_gironi":
         # torna alla composizione: stesse coppie, impostazioni e sorteggio;

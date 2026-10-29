@@ -393,6 +393,18 @@ def crea_tabellone(t: dict) -> None:
     _avanza(t)
 
 
+def annulla_tabellone(t: dict) -> None:
+    """Torna ai gironi conclusi: via tabellone, risultati KO e podio. I gironi
+    restano con i loro risultati (di nuovo correggibili); impostazioni,
+    formati dei turni e ritiri restano."""
+    if t["fase"] not in ("ko", "finito"):
+        raise ValueError("Non c'è un tabellone da annullare")
+    t["partite"] = {k: p for k, p in t["partite"].items() if p["tab"] == "G"}
+    t["sospese"] = [pid for pid in t.get("sospese", []) if pid in t["partite"]]
+    t["podio"] = None
+    t["fase"] = "gironi"
+
+
 # schema di ingresso dei perdenti nei turni L pari, per dimensione tabellone:
 # 0 = invariato, 1 = invertito, 2 = metà scambiate, 3 = invertito + metà scambiate
 SCHEMI_INGRESSO = {}
