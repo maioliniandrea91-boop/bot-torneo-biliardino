@@ -17,4 +17,4 @@ jobs:
             echo "::error::Torneo in corso (ven 20:00 - sab 05:00): deploy bloccato. Ripubblica dopo le 05:00 di sabato."
             exit 1
           fi
-          echo "TEST blocco"; exit 1
+          echo "Fuori dalla finestra del torneo: deploy consentito."
