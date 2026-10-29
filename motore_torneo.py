@@ -234,16 +234,42 @@ def registra(t: dict, pid: str, giochi: list[tuple[int, int]]) -> None:
 
 
 def _verifica_correzione_ko(t, p, nuovo_vincitore):
+    """Prima di invertire il vincitore di una partita KO: le partite a valle
+    non devono essere iniziate. Quelle chiuse in automatico (contro un BYE o a
+    tavolino per ritiro) non contano come giocate: si riaprono e si ricalcolano."""
     if nuovo_vincitore == p["vincitore"]:
         return
-    for q in t["partite"].values():
-        if q["stato"] != "attesa" and (q["fonte_a"], q["fonte_b"]) != (None, None) and \
-                p["id"] in (q["fonte_a"][1], q["fonte_b"][1]):
+    P = t["partite"]
+
+    def a_valle(pid):
+        return [q for q in P.values()
+                if any(f and f[1] == pid for f in (q["fonte_a"], q["fonte_b"]))]
+
+    def automatica(q):
+        return q["stato"] == "finita" and (BYE in (q["a"], q["b"]) or q["tavolino"])
+
+    da_riaprire, coda, visti = [], [p["id"]], set()
+    while coda:
+        pid = coda.pop()
+        for q in a_valle(pid):
+            if q["id"] in visti:
+                continue
+            visti.add(q["id"])
+            if q["stato"] == "attesa":
+                continue
+            if automatica(q):
+                da_riaprire.append(q)
+                coda.append(q["id"])
+                continue
             raise ValueError("Impossibile invertire il vincitore: le partite successive sono già iniziate")
-    for q in t["partite"].values():               # libera le partite a valle
+    for q in da_riaprire:                          # riaperte: _avanza le richiude se serve
+        q["stato"], q["vincitore"], q["perdente"], q["tavolino"] = "attesa", None, None, False
+        q["giochi"] = []
+    liberare = {p["id"]} | {q["id"] for q in da_riaprire}
+    for q in P.values():                           # libera i posti a valle
         for lato in ("a", "b"):
             f = q[f"fonte_{lato}"]
-            if f and f[1] == p["id"]:
+            if f and f[1] in liberare:
                 q[lato] = None
 
 
@@ -498,7 +524,7 @@ def _avanza(t):
                 elif p["a"] in t["ritirate"] or p["b"] in t["ritirate"]:
                     _tavolino(t, p)
                     cambiato = True
-    if t["fase"] == "ko" and P["F"]["stato"] == "finita":
+    if t["fase"] in ("ko", "finito") and P["F"]["stato"] == "finita":   # anche dopo una correzione
         perdenti = [p for p in P.values() if p["tab"] == "L"]
         ultima_l = max(perdenti, key=lambda p: p["turno"])
         t["podio"] = [P["F"]["vincitore"], P["F"]["perdente"], ultima_l["perdente"]]
