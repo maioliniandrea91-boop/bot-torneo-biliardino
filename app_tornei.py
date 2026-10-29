@@ -80,6 +80,7 @@ ID_PROVA = -1
 CHIAVE_PROVA = "app_prova"            # valore = uid admin che l'ha avviata
 CHIAVE_PROVA_DAL = "app_prova_dal"    # ISO: scade da sola dopo DURATA_PROVA
 DURATA_PROVA_ORE = 12
+STORIA_MAX = 20                       # azioni annullabili per torneo
 NOMI_PROVA = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
               "India", "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
               "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Xray",
@@ -89,7 +90,7 @@ NOMI_PROVA = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "H
 AZIONI_ADMIN = {"prepara", "anteprima_gironi", "crea_gironi", "imposta", "formato",
                 "avvia", "ferma", "chiama", "risultato", "ritira", "crea_tabellone",
                 "ricomincia", "sospendi", "riattiva", "assente", "simula",
-                "annulla_gironi", "annulla_tabellone", "completa_gironi"}
+                "annulla_gironi", "annulla_tabellone", "completa_gironi", "annulla"}
 AZIONI_COPPIA = {"proponi", "conferma", "contesta"}
 
 _db_connect = None
@@ -125,6 +126,13 @@ def crea_tabelle(conn):
         CREATE TABLE IF NOT EXISTS app_messaggi (
             torneo_id INTEGER, pid TEXT, tipo TEXT,      -- chiamata | risultato
             chat_id INTEGER, message_id INTEGER, creato_il TEXT
+        )
+    """)
+    # storico per "Annulla": stato del torneo PRIMA di ogni azione (ultime STORIA_MAX)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_storia (
+            torneo_id INTEGER, stato TEXT, proposte TEXT, utenti TEXT,
+            azione TEXT, quando TEXT
         )
     """)
     # cancellazioni a tempo: salvate su DB perché la job queue si perde a ogni riavvio/deploy
@@ -163,6 +171,7 @@ def prova_attiva(conn) -> int | None:
 
 def avvia_prova(conn, uid: int, n: int) -> None:
     conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (ID_PROVA,))
+    conn.execute("DELETE FROM app_storia WHERE torneo_id = ?", (ID_PROVA,))
     for k, v in ((CHIAVE_PROVA, str(uid)), (CHIAVE_PROVA_DAL, datetime.now().isoformat())):
         conn.execute("INSERT INTO stato (chiave, valore) VALUES (?, ?) "
                      "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore", (k, v))
@@ -177,6 +186,7 @@ def avvia_prova(conn, uid: int, n: int) -> None:
 
 def chiudi_prova(conn) -> bool:
     n = conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (ID_PROVA,)).rowcount
+    conn.execute("DELETE FROM app_storia WHERE torneo_id = ?", (ID_PROVA,))
     n += conn.execute("DELETE FROM stato WHERE chiave IN (?, ?)", (CHIAVE_PROVA, CHIAVE_PROVA_DAL)).rowcount
     conn.commit()
     return bool(n)
@@ -205,7 +215,44 @@ def carica(conn) -> dict:
     return s
 
 
-def salva(conn, s: dict) -> None:
+def _storicizza(conn, tid: int, azione: str) -> None:
+    """Copia lo stato attuale del torneo nello storico (prima di cambiarlo)."""
+    row = conn.execute("SELECT stato, proposte, utenti FROM app_tornei WHERE torneo_id = ?", (tid,)).fetchone()
+    if not row:
+        return
+    conn.execute("INSERT INTO app_storia VALUES (?, ?, ?, ?, ?, ?)",
+                 (tid, *row, azione, datetime.now().isoformat(timespec="seconds")))
+    conn.execute("DELETE FROM app_storia WHERE torneo_id = ? AND rowid NOT IN (SELECT rowid FROM app_storia "
+                 "WHERE torneo_id = ? ORDER BY rowid DESC LIMIT ?)", (tid, tid, STORIA_MAX))
+
+
+def ultima_annullabile(conn, tid) -> str | None:
+    row = conn.execute("SELECT azione FROM app_storia WHERE torneo_id = ? ORDER BY rowid DESC LIMIT 1",
+                       (tid,)).fetchone()
+    return row[0] if row else None
+
+
+def annulla(conn, s: dict) -> str:
+    """Riporta il torneo allo stato prima dell'ultima azione registrata."""
+    tid = s["torneo_id"]
+    row = conn.execute("SELECT rowid, stato, proposte, utenti, azione FROM app_storia WHERE torneo_id = ? "
+                       "ORDER BY rowid DESC LIMIT 1", (tid,)).fetchone()
+    if not row:
+        raise ValueError("Niente da annullare")
+    rowid, stato, proposte, utenti, azione = row
+    s["t"], s["proposte"], s["utenti"] = json.loads(stato), json.loads(proposte), json.loads(utenti)
+    if s.get("prova") is None and s["t"]["fase"] != "iscrizioni":   # es. annullato "Ricomincia"
+        conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '0') "
+                     "ON CONFLICT(chiave) DO UPDATE SET valore = '0'")
+    salva(conn, s, storico=False)
+    conn.execute("DELETE FROM app_storia WHERE rowid = ?", (rowid,))
+    conn.commit()
+    return azione
+
+
+def salva(conn, s: dict, storico: bool = True) -> None:
+    if storico and s.get("azione"):
+        _storicizza(conn, s["torneo_id"], s["azione"])
     s["versione"] += 1
     conn.execute(
         "INSERT INTO app_tornei (torneo_id, stato, proposte, utenti, versione, aggiornato_il) "
@@ -433,6 +480,10 @@ def esegui(conn, uid: int, d: dict) -> dict:
     if az == "prepara" and prova:
         raise ValueError("In prova le coppie sono già caricate")
     s["accessi"] = mappa_utenti(conn, s) if s["t"] is not None or not prova else {}
+    s["azione"] = descrivi_azione(s, d, uid)
+    if az == "annulla":
+        risposta = {"ok": True, "avvisi": [], "annullata": annulla(conn, s)}
+        return risposta
     if az == "prepara":
         return _prepara(conn, s)
     if s["t"] is None:
@@ -449,6 +500,7 @@ def esegui(conn, uid: int, d: dict) -> dict:
             s["t"], s["proposte"] = M.nuovo_torneo(t["coppie"]), {}
             salva(conn, s)
             return risposta
+        _storicizza(conn, s["torneo_id"], s["azione"])
         conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (s["torneo_id"],))
         if t["fase"] != "iscrizioni":   # i gironi le avevano chiuse: si riaprono
             conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '1') "
@@ -471,7 +523,7 @@ def esegui(conn, uid: int, d: dict) -> dict:
             risposta["minuti"] = stima_minuti(s["t"], n, forza)
             if d.get("rimescola"):                 # il nuovo sorteggio resta valido
                 s["t"]["seme"] = t["seme"]
-                salva(conn, s)
+                salva(conn, s, storico=False)
             return risposta
         if not prova:   # chiude le iscrizioni del torneo vero
             conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '0') "
@@ -617,6 +669,33 @@ def esegui(conn, uid: int, d: dict) -> dict:
     s["t"], s["proposte"] = t, proposte
     salva(conn, s)
     return risposta
+
+
+DESCRIZIONI = {
+    "prepara": "preparazione coppie", "crea_gironi": "creazione gironi", "imposta": "impostazioni",
+    "formato": "formato turno", "avvia": "avvio partita", "ferma": "partita fermata",
+    "chiama": "chiamata partite", "risultato": "risultato", "ritira": "ritiro coppia",
+    "crea_tabellone": "creazione tabellone", "ricomincia": "Ricomincia", "sospendi": "stand-by",
+    "riattiva": "riattivazione partita", "assente": "giocatore non arrivato", "simula": "giro simulato",
+    "annulla_gironi": "ritorno alla composizione", "annulla_tabellone": "annullamento tabellone",
+    "completa_gironi": "gironi completati", "proponi": "risultato inserito da una coppia",
+    "conferma": "risultato confermato da una coppia", "contesta": "contestazione",
+}
+
+
+def descrivi_azione(s: dict, d: dict, uid: int) -> str:
+    testo = DESCRIZIONI.get(d.get("azione"), d.get("azione", "?"))
+    t = s.get("t")
+    p = t["partite"].get(d.get("pid")) if t and d.get("pid") else None
+    if p:
+        testo += f" · {p['a']} – {p['b']}"
+        if d.get("giochi"):
+            testo += f" ({_testo_giochi(d['giochi'])})"
+    elif d.get("coppia"):
+        testo += f" · {d['coppia']}"
+    if not _is_admin(uid):
+        testo += " [coppia]"
+    return testo
 
 
 def _giochi_casuali(rng, gol: int, bo: int, vant: int = 0) -> list[tuple[int, int]]:
@@ -820,6 +899,8 @@ async def h_stato(req):
     v["versione"] = versione
     if s["t"] is None and s["torneo_id"]:
         v["iscritte"] = [n for n, _ in squadre_iscritte(conn, s["torneo_id"])]
+    if uid is not None and _is_admin(uid) and s["torneo_id"]:
+        v["annulla"] = ultima_annullabile(conn, s["torneo_id"])
     if uid is not None and _is_admin(uid) and url_pubblico():
         v["url_tv"] = f"{url_pubblico()}/tv/{token_tv(conn)}"
     return web.json_response(v, headers=NO_CACHE)
@@ -832,6 +913,12 @@ async def h_azione(req):
     except ValueError:
         raise web.HTTPBadRequest(text="Richiesta non valida")
     conn = _conn()
+    if d.get("azione") == "pdf":   # non cambia lo stato: solo invio in chat privata
+        if not _is_admin(uid):
+            return web.json_response({"ok": False, "errore": "Azione riservata agli admin"}, status=403)
+        bot = req.app.get("bot")
+        errore = await invia_pdf(bot, uid) if bot else "Bot non disponibile"
+        return web.json_response({"ok": not errore, "errore": errore})
     try:
         r = esegui(conn, uid, d)
     except Vietato as e:
@@ -998,6 +1085,29 @@ async def cmd_fineprova(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else "Nessuna prova attiva.")
 
 
+async def invia_pdf(bot, chat_id: int) -> str | None:
+    """PDF di gironi e tabellone in privato. Ritorna un errore, o None se inviato."""
+    import tabellone_pdf
+    s = carica(_conn())
+    if s["t"] is None or not s["t"]["gironi"]:
+        return "Gironi non ancora creati: niente da stampare."
+    dati = tabellone_pdf.crea_pdf(s["t"], s["nome"], etichetta)
+    nome = "".join(ch if ch.isalnum() else "_" for ch in s["nome"]).strip("_") or "torneo"
+    await bot.send_document(chat_id, dati, filename=f"Tabellone_{nome}.pdf",
+                            caption=f"📄 {s['nome']} — aggiornato alle {datetime.now(ZoneInfo('Europe/Rome')):%H:%M}")
+    return None
+
+
+async def cmd_tabellone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        await _rispondi(update, context, "Comando riservato agli admin.")
+        return
+    await _cancella_comando(update)
+    errore = await invia_pdf(context.bot, update.effective_user.id)
+    if errore:
+        await context.bot.send_message(update.effective_user.id, errore)
+
+
 async def cmd_avvisabili(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update.effective_user.id):
         await _rispondi(update, context, "Comando riservato agli admin.")
@@ -1049,8 +1159,24 @@ def riprendi_cancellazioni(jq, bot) -> None:
         _programma_cancella(jq, bot, chat_id, mid, resto)
 
 
+@web.middleware
+async def _errori_server(req, handler):
+    """Errore inatteso nell'app: risposta pulita al telefono e avviso agli admin."""
+    try:
+        return await handler(req)
+    except web.HTTPException:
+        raise
+    except Exception as e:
+        bot = req.app.get("bot")
+        if bot is not None:
+            import servizio
+            await servizio.notifica_errore(bot, f"app {req.path}", e)
+        return web.json_response({"ok": False, "errore": "Errore interno: l'admin è stato avvisato"},
+                                 status=500)
+
+
 def crea_web_app(bot=None, jq=None) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[_errori_server])
     app["bot"] = bot
     app["jq"] = jq
     app.router.add_get("/", lambda r: web.Response(text="ok"))
@@ -1204,6 +1330,7 @@ COMANDI_APP = [
     ("fineprova", "[admin] Chiude la prova: l'app torna sul torneo vero"),
     ("avvisabili", "[admin] Quali coppie ricevono le chiamate in privato e chi deve fare /sonoio"),
     ("tv", "[admin] Link della pagina TV del tabellone (/tv nuovo lo cambia)"),
+    ("tabellone", "[admin] PDF stampabile di gironi e tabellone (in privato)"),
 ]
 
 
@@ -1213,6 +1340,7 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando, token, admin
         db_connect, is_admin, rispondi, cancella_comando, token, set(admin_ids))
     app.add_handler(CommandHandler("app", cmd_app))
     app.add_handler(CommandHandler("tv", cmd_tv))
+    app.add_handler(CommandHandler("tabellone", cmd_tabellone))
     app.add_handler(CommandHandler("sonoio", cmd_sonoio))
     app.add_handler(CommandHandler("scollega", cmd_scollega))
     app.add_handler(CommandHandler("avvisabili", cmd_avvisabili))

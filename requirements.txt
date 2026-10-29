@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]==21.6
 python-docx==1.1.2
 Pillow==11.1.0
 aiohttp==3.11.18
+reportlab==5.0.1

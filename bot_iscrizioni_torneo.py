@@ -63,6 +63,7 @@ from docx import Document
 
 import app_tornei
 import comando_locandina
+import servizio
 import statistiche
 from telegram import (
     BotCommand,
@@ -123,7 +124,8 @@ COMANDI = [
     ("vedisondaggio", "[admin] Mostra domanda e opzioni attuali del sondaggio, senza inviarlo"),
     ("anteprimasondaggio", "[admin] Ti manda il sondaggio in privato, così lo vedi prima che parta nel gruppo"),
     ("modificasondaggio", "[admin] Cambia domanda/opzioni — /modificasondaggio Domanda | Opzione1 | Opzione2"),
-] + comando_locandina.COMANDI_LOCANDINA + statistiche.COMANDI_STATISTICHE + app_tornei.COMANDI_APP
+] + comando_locandina.COMANDI_LOCANDINA + statistiche.COMANDI_STATISTICHE + app_tornei.COMANDI_APP \
+    + servizio.COMANDI_SERVIZIO
 # =========================================
 
 
@@ -1236,6 +1238,7 @@ def main():
     comando_locandina.registra(app, db_connect, is_admin, CHIAVE_CHAT_GIOCO_LIBERO, ADMIN_IDS, MAX_SQUADRE,
                                ripubblica_lista=ripubblica_lista_gruppo)
     app_tornei.registra(app, db_connect, is_admin, rispondi, cancella_comando, TOKEN, ADMIN_IDS)
+    servizio.registra(app, db_connect, DB_PATH, is_admin, ADMIN_IDS)
 
     app.job_queue.run_daily(
         sondaggio_automatico,

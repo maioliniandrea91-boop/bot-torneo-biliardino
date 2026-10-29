@@ -441,6 +441,7 @@ function vPodio(){
 let prev = null, metodo = "teste", nGironi = 2, manuale = {};
 function vAdmin(){
   let h = "";
+  if (S.annulla) h += `<section><button class="b big" onclick="annullaUltima()">↩️ Annulla: ${esc(S.annulla)}</button></section>`;
   if (S.fase === "nessuna"){
     h += `<section><h2>Iscritte al torneo attivo (${S.iscritte.length})</h2><div class="card">${S.iscritte.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c)}</span></div>`).join("") || '<span class="muted">Nessuna coppia</span>'}</div>
       <button class="b pri big" onclick="prepara()" ${S.iscritte.length>=4?"":"disabled"}>Prepara il torneo con queste coppie</button>
@@ -463,6 +464,7 @@ function vAdmin(){
     return h;
   }
   // gironi / ko / finito
+  h += `<section><button class="b big" onclick="pdf()">📄 PDF stampabile in chat</button></section>`;
   if (S.url_tv) h += `<section><h2>Pagina TV</h2><div class="card"><div class="row"><span class="muted" style="word-break:break-all">${esc(S.url_tv)}</span><button class="b" onclick="copia()">Copia</button></div></div></section>`;
   if (S.fase === "gironi"){
     const mancano = S.partite.filter(p=>p.tab==="G" && p.stato!=="finita").length;
@@ -574,6 +576,8 @@ async function confermaAdmin(pid, quale){
   const giochi = quale === "c" ? pr.controproposta : pr.giochi;
   await azione({azione:"risultato", pid, giochi}, "Risultato registrato");
 }
+async function annullaUltima(){ if (await chiedi(`Annullo l'ultima azione?\n${S.annulla}`)) await azione({azione:"annulla"}, "Azione annullata"); }
+async function pdf(){ await azione({azione:"pdf"}, "PDF inviato in chat col bot"); }
 async function simula(){ await azione({azione:"simula"}, "Giro simulato"); }
 async function completaGironi(){ await azione({azione:"completa_gironi"}, "Gironi completati: crea il tabellone"); }
 function cambiaVista(){ vistaGiocatore = !vistaGiocatore; tab = null; render(); window.scrollTo(0,0); }
