@@ -320,7 +320,8 @@ function vAdmin(){
   if (S.url_tv) h += `<section><h2>Pagina TV</h2><div class="card"><div class="row"><span class="muted" style="word-break:break-all">${esc(S.url_tv)}</span><button class="b" onclick="copia()">Copia</button></div></div></section>`;
   if (S.fase === "gironi"){
     const mancano = S.partite.filter(p=>p.tab==="G" && p.stato!=="finita").length;
-    h += `<section><button class="b pri big" onclick="tabellone()" ${mancano?"disabled":""}>Crea tabellone doppio KO</button><p class="muted" style="margin:8px 6px">${mancano ? `Mancano ${mancano} partite dei gironi.` : "Gironi conclusi: crea il tabellone. Dopo non si possono più correggere i gironi."}</p></section>`;
+    h += `<section><button class="b pri big" onclick="tabellone()" ${mancano?"disabled":""}>Crea tabellone doppio KO</button><p class="muted" style="margin:8px 6px">${mancano ? `Mancano ${mancano} partite dei gironi.` : "Gironi conclusi: crea il tabellone. Dopo non si possono più correggere i gironi."}</p>
+      <button class="b big" onclick="annullaGironi()">↩ Torna alla composizione dei gironi</button></section>`;
   }
   if (S.fase !== "finito"){
     h += `<section><h2>Presenze</h2><div class="card">${S.coppie.filter(c=>!S.ritirate.includes(c)).map(c => `<div class="row"><span class="muted">${esc(c)}</span><span style="display:flex;gap:6px">${S.giocatori[c].map(g => {
@@ -372,8 +373,14 @@ async function anteprima(rimescola){
   if (r){ prev = r; render(); }
 }
 async function creaGironi(){
-  if (!await chiedi("Confermi i gironi? Poi non si cambiano più.")) return;
   if (await azione({azione:"crea_gironi", ...datiGironi()}, "Gironi creati")){ prev=null; tab="partite"; render(); }
+}
+async function annullaGironi(){
+  const giocate = S.partite.filter(p => p.tab==="G" && p.stato==="finita" && !p.tavolino).length;
+  const msg = "Torno alla composizione dei gironi? I gironi vengono azzerati" +
+    (giocate ? ` e si perdono ${giocate} risultati già inseriti.` : " (nessun risultato inserito).");
+  if (!await chiedi(msg)) return;
+  if (await azione({azione:"annulla_gironi"}, "Gironi azzerati: modifica e riconferma")){ prev=null; tab="admin"; render(); }
 }
 async function prepara(){ prev=null; await azione({azione:"prepara"}, "Coppie caricate"); }
 async function imposta(k, v, min, max){ if (v<min||v>max) return; prev=null; await azione({azione:"imposta", valori:{[k]:v}}); }
