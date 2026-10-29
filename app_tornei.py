@@ -119,6 +119,13 @@ def crea_tabelle(conn):
             aggiornato_il TEXT
         )
     """)
+    # avvisi privati da cancellare quando non servono più (vedi pulisci_messaggi)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_messaggi (
+            torneo_id INTEGER, pid TEXT, tipo TEXT,      -- chiamata | risultato
+            chat_id INTEGER, message_id INTEGER, creato_il TEXT
+        )
+    """)
     conn.commit()
 
 
@@ -572,7 +579,8 @@ def esegui(conn, uid: int, d: dict) -> dict:
                 for u in s["accessi"].get(altra, ()):
                     if u != uid:
                         risposta["avvisi"].append((u, f"🎱 {mia} ha inserito il risultato contro di voi: "
-                                                      f"{_testo_giochi(giochi)}. Confermalo nell'app."))
+                                                      f"{_testo_giochi(giochi)}. Confermalo nell'app.",
+                                                   {"pid": p["id"], "tipo": "risultato"}))
         elif az == "conferma":
             if not prop or prop["da"] != altra:
                 raise ValueError("Nessun risultato dell'altra coppia da confermare")
@@ -663,7 +671,7 @@ def _testo_giochi(giochi) -> str:
 
 
 def _avvisi_chiamata(s, partite) -> list:
-    """Avvisi (user_id, testo, chiamata). 'chiamata' = (coppia, avversario,
+    """Avvisi (user_id, testo, meta). meta["chiamata"] = (coppia, avversario,
     biliardino): serve a h_azione per dire all'admin chi non è stato avvisato.
     Una coppia senza account collegati compare con user_id None."""
     avvisi = []
@@ -671,17 +679,18 @@ def _avvisi_chiamata(s, partite) -> list:
         for c, avv in ((p["a"], p["b"]), (p["b"], p["a"])):
             if c == M.BYE or avv == M.BYE:
                 continue
-            chiamata = (c, avv, p["biliardino"])
+            meta = {"chiamata": (c, avv, p["biliardino"]), "pid": p["id"], "tipo": "chiamata"}
             utenti = s["accessi"].get(c, ())
             if not utenti:
-                avvisi.append((None, None, chiamata))
+                avvisi.append((None, None, meta))
             for u in utenti:
-                avvisi.append((u, f"🎱 Tocca a voi! {c} contro {avv} — biliardino {p['biliardino']}", chiamata))
+                avvisi.append((u, f"🎱 Tocca a voi! {c} contro {avv} — biliardino {p['biliardino']}", meta))
     return avvisi
 
 
 def _avvisi_admin(s, p, motivo) -> list:
-    return [(a, f"⚠️ {p['a']} – {p['b']}: {motivo}. Decidi tu dall'app.") for a in _admin_ids]
+    return [(a, f"⚠️ {p['a']} – {p['b']}: {motivo}. Decidi tu dall'app.",
+             {"pid": p["id"], "tipo": "risultato"}) for a in _admin_ids]
 
 
 # ======================= AUTENTICAZIONE TELEGRAM =======================
@@ -784,16 +793,24 @@ async def h_azione(req):
     bot = req.app.get("bot")
     if bot is not None:
         avvisata: dict[tuple, bool] = {}   # chiamata -> almeno un account raggiunto
-        for user_id, testo, *chiamata in r.pop("avvisi", []):
+        tid = carica(conn)["torneo_id"]
+        for user_id, testo, *resto in r.pop("avvisi", []):
+            meta = resto[0] if resto else {}
             ok = False
             if user_id is not None:
                 try:
-                    await bot.send_message(chat_id=user_id, text=testo, reply_markup=_bottone_app())
+                    msg = await bot.send_message(chat_id=user_id, text=testo, reply_markup=_bottone_app())
                     ok = True
+                    if meta.get("pid"):   # da cancellare quando la partita è chiusa
+                        conn.execute("INSERT INTO app_messaggi VALUES (?, ?, ?, ?, ?, ?)",
+                                     (tid, meta["pid"], meta["tipo"], user_id, msg.message_id,
+                                      datetime.now().isoformat()))
                 except Exception:
                     pass  # utente che non ha mai avviato il bot in privato
-            if chiamata:
-                avvisata[chiamata[0]] = avvisata.get(chiamata[0], False) or ok
+            if meta.get("chiamata"):
+                avvisata[meta["chiamata"]] = avvisata.get(meta["chiamata"], False) or ok
+        conn.commit()
+        await pulisci_messaggi(bot, conn)
         mancate = [c for c, ok in avvisata.items() if not ok]
         if mancate:   # A: l'admin sa chi chiamare a voce
             testo = "📣 Da chiamare a voce (avviso privato non arrivato):\n" + "\n".join(
@@ -814,6 +831,34 @@ async def h_azione(req):
     else:
         r.pop("avvisi", None)
     return web.json_response(r)
+
+
+async def pulisci_messaggi(bot, conn) -> None:
+    """Cancella gli avvisi privati che non servono più:
+    - "Tocca a voi" quando la partita non è più in campo (finita, ferma, stand-by);
+    - avvisi sul risultato quando la partita è finita o la proposta non c'è più;
+    - tutti quelli di un torneo non più attivo (prova chiusa, Ricomincia, ecc.)."""
+    righe = conn.execute("SELECT rowid, torneo_id, pid, tipo, chat_id, message_id FROM app_messaggi").fetchall()
+    if not righe:
+        return
+    s = carica(conn)
+    partite = s["t"]["partite"] if s["t"] else {}
+    via = []
+    for rowid, tid, pid, tipo, chat_id, mid in righe:
+        p = partite.get(pid) if tid == s["torneo_id"] else None
+        if tipo == "chiamata":
+            scaduto = p is None or p["stato"] != "in_corso"
+        else:
+            scaduto = p is None or p["stato"] == "finita" or pid not in s["proposte"]
+        if scaduto:
+            via.append(rowid)
+            try:
+                await bot.delete_message(chat_id, mid)
+            except Exception:
+                pass   # già cancellato a mano o più vecchio di 48 ore
+    if via:
+        conn.executemany("DELETE FROM app_messaggi WHERE rowid = ?", [(r,) for r in via])
+        conn.commit()
 
 
 async def _raggiungibile(bot, user_id: int) -> bool:
@@ -896,7 +941,9 @@ async def cmd_fineprova(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update.effective_user.id):
         await _rispondi(update, context, "Comando riservato agli admin.")
         return
-    chiusa = chiudi_prova(_conn())
+    conn = _conn()
+    chiusa = chiudi_prova(conn)
+    await pulisci_messaggi(context.bot, conn)
     await _rispondi(update, context, "🧪 Prova chiusa: l'app torna sul torneo vero." if chiusa
                     else "Nessuna prova attiva.")
 
