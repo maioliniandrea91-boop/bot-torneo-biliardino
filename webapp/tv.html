@@ -119,13 +119,20 @@ function render(){
   c.style.gridTemplateColumns = "";
   if (S.fase === "ko"){
     c.className = "grid kofase";
-    c.innerHTML = `<div class="brkbox" id="brkbox">${tabellone()}</div>
+    c.innerHTML = `<div class="brkbox" id="brkbox"></div>
       <div class="striscia">${campo()}${prossime()}${ultimi()}</div>`;
+    const box = document.getElementById("brkbox"), tutto = tabellone(null);
+    const scala = t => Math.min((box.clientWidth - 16) / t.larg, (box.clientHeight - 16) / t.alt);
+    if (scala(tutto) >= SOGLIA_LEGGIBILE) lato = null;          // ci sta tutto: niente alternanza
+    else if (!lato){ lato = "W"; latoDal = Date.now(); }
+    box.innerHTML = (lato ? tabellone(lato) : tutto).html;
+    document.getElementById("fase").textContent = lato === "W" ? "Tabellone vincenti" : lato === "L" ? "Tabellone perdenti" : FASI.ko;
     adatta();
     return;
   }
+  lato = null;
   c.className = "grid";
-  c.innerHTML = `<div class="col">${S.fase === "gironi" ? gironi() : tabellone()}</div><div class="col">${campo()}${prossime()}${ultimi()}</div>`;
+  c.innerHTML = `<div class="col">${S.fase === "gironi" ? gironi() : tabellone(null).html}</div><div class="col">${campo()}${prossime()}${ultimi()}</div>`;
 }
 
 function gironi(){
@@ -138,7 +145,14 @@ function gironi(){
 /* Tabellone a farfalla (come il foglio del circolo): perdenti a sinistra,
    vincenti a destra, finale in fondo a destra. Le lettere indicano dove
    scende chi perde nel tabellone vincenti. Si adatta allo spazio (adatta()). */
-function tabellone(){
+/* Se il tabellone intero non sta in modo leggibile, la TV alterna ogni
+   ALTERNA_SEC secondi lato vincenti (con la finale) e lato perdenti. */
+const SOGLIA_LEGGIBILE = 0.62, ALTERNA_SEC = 30;
+let lato = null;   // null = tutto | "W" | "L"
+let latoDal = Date.now();   // inizio dei 30 secondi del lato mostrato (per lo scorrimento)
+setInterval(() => { if (lato && S && S.fase === "ko"){ lato = lato === "W" ? "L" : "W"; latoDal = Date.now(); render(); } }, ALTERNA_SEC * 1000);
+
+function tabellone(soloLato){
   const P = {}; S.partite.filter(p => p.tab !== "G").forEach(p => P[p.id] = p);
   const tutte = Object.values(P);
   const W = tutte.filter(p => p.tab === "W"), L = tutte.filter(p => p.tab === "L"), F = P["F"];
@@ -147,10 +161,10 @@ function tabellone(){
   const idx = id => +id.split("-")[1] - 1;
   const ord = (a, b) => a.turno - b.turno || idx(a.id) - idx(b.id);
   const colX = {}; let x = 0;
-  for (let j = kL; j >= 1; j--){ colX["L" + j] = x; x += CW + GAP; }
-  x += MID;
-  for (let r = 1; r <= kW; r++){ colX["W" + r] = x; x += CW + GAP; }
-  colX.F = x; const larg = x + CW + 4;
+  if (soloLato !== "W"){ for (let j = kL; j >= 1; j--){ colX["L" + j] = x; x += CW + GAP; } x += MID; }
+  if (soloLato !== "L"){ for (let r = 1; r <= kW; r++){ colX["W" + r] = x; x += CW + GAP; } colX.F = x; x += CW + GAP; }
+  const larg = x - GAP + 4;
+  const vis = p => X(p) !== undefined;      // partita mostrata in questa vista
   const X = p => colX[p.tab === "F" ? "F" : p.tab + p.turno];
   const lettera = {}; W.filter(p => p.turno >= 2).sort(ord).forEach((p, i) => lettera[p.id] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i] || "?");
   const fontiLinea = q => [q.fonte_a, q.fonte_b].filter(f => f && P[f[1]] &&
@@ -162,17 +176,23 @@ function tabellone(){
     y[q.id] = src.length ? src.reduce((a, b) => a + b, 0) / src.length : HEAD + STEP / 2;
   });
   if (F) y.F = y[F.fonte_a[1]];
-  const alt = Math.max(...Object.values(y)) + BH / 2 + 26;
+  // solo le righe delle partite mostrate, spostate in alto
+  const ys = tutte.filter(vis).map(p => y[p.id]).filter(v => v !== undefined);
+  const sposta = Math.min(...ys) - BH / 2 - HEAD + 6;
+  Object.keys(y).forEach(k => y[k] -= sposta);
+  const alt = Math.max(...ys) - sposta + BH / 2 + 26;
   let linee = "";
-  tutte.forEach(q => fontiLinea(q).forEach(f => {
-    const s = P[f[1]]; if (y[s.id] === undefined) return;
+  tutte.filter(vis).forEach(q => fontiLinea(q).forEach(f => {
+    const s = P[f[1]]; if (y[s.id] === undefined || !vis(s)) return;
     const dx = X(q) > X(s), x1 = dx ? X(s) + CW : X(s), x2 = dx ? X(q) : X(q) + CW, xm = (x1 + x2) / 2;
     linee += `<path d="M${x1} ${y[s.id]}H${xm}V${y[q.id]}H${x2}"/>`;
   }));
   let h = "";
-  for (let j = 1; j <= kL; j++) h += `<div class="ch" style="left:${colX["L"+j]}px">${j === kL ? "Finale perdenti" : "Perdenti " + j}</div>`;
-  for (let r = 1; r <= kW; r++) h += `<div class="ch" style="left:${colX["W"+r]}px">${r === kW ? "Finale vincenti" : "Vincenti " + r}</div>`;
-  if (F) h += `<div class="ch fin" style="left:${colX.F}px">Finale</div>`;
+  if (soloLato !== "W") for (let j = 1; j <= kL; j++) h += `<div class="ch" style="left:${colX["L"+j]}px">${j === kL ? "Finale perdenti" : "Perdenti " + j}</div>`;
+  if (soloLato !== "L"){
+    for (let r = 1; r <= kW; r++) h += `<div class="ch" style="left:${colX["W"+r]}px">${r === kW ? "Finale vincenti" : "Vincenti " + r}</div>`;
+    if (F) h += `<div class="ch fin" style="left:${colX.F}px">Finale</div>`;
+  }
   const nome = (p, lato) => {
     const c = p[lato];
     if (c === "BYE") return `<span class="n muted"><i>BYE</i></span>`;
@@ -189,7 +209,7 @@ function tabellone(){
     return p.giochi.length === 1 ? p.giochi[0][i] : p.giochi.filter(g => g[i] > g[1 - i]).length;
   };
   tutte.forEach(p => {
-    if (y[p.id] === undefined) return;
+    if (y[p.id] === undefined || !vis(p)) return;
     const fin = p.stato === "finita", cl = lato => fin && !p.bye ? (p.vincitore === p[lato] ? "w" : "l") : "";
     const cap = p.tab === "F" ? "vincente 1° · perdente 2°"
               : p.tab === "L" && p.turno === kL ? "vincente in finale · perdente 3°"
@@ -200,20 +220,42 @@ function tabellone(){
       <div class="r ${cl("b")}">${nome(p,"b")}<b>${punti(p,"b")}</b></div>
       ${lettera[p.id] ? `<span class="lt">${lettera[p.id]}</span>` : ""}${cap ? `<span class="cap">${cap}</span>` : ""}</div>`;
   });
-  return `<div class="brkfit" id="brkfit" style="width:${larg}px;height:${alt}px"><div class="brk" id="brkin" style="width:${larg}px;height:${alt}px">
-    <svg width="${larg}" height="${alt}">${linee}</svg>${h}</div></div>`;
+  return {larg, alt, html: `<div class="brkfit" id="brkfit" style="width:${larg}px;height:${alt}px"><div class="brk" id="brkin" style="width:${larg}px;height:${alt}px">
+    <svg width="${larg}" height="${alt}">${linee}</svg>${h}</div></div>`};
 }
-/* scala il tabellone per stare tutto nel riquadro, centrato */
+/* Vista intera: scala per stare tutta nel riquadro, centrata.
+   Vista di un lato (alternanza): scala sulla larghezza; se così è più alta
+   del riquadro, nei 30 secondi resta ferma in alto, scende piano fino in
+   fondo, si ferma e torna su. */
+let corsa = 0;
 function adatta(){
   const box = document.getElementById("brkbox"), fit = document.getElementById("brkfit"), inn = document.getElementById("brkin");
   if (!box || !fit) return;
   const W = parseFloat(fit.style.width), H = parseFloat(fit.style.height);
-  const k = Math.min((box.clientWidth - 16) / W, (box.clientHeight - 16) / H, 1.6);
+  const bw = box.clientWidth - 16, bh = box.clientHeight - 16;
+  let k = Math.min(bw / W, bh / H, 1.6);
+  corsa = 0;
+  if (lato){
+    const kl = Math.min(bw / W, 1.4);
+    if (H * kl > bh){ k = kl; corsa = H * k - bh; }
+  }
   inn.style.transform = `scale(${k})`;
   fit.style.width = W * k + "px"; fit.style.height = H * k + "px";
-  fit.style.marginLeft = -(W * k) / 2 + "px"; fit.style.marginTop = -(H * k) / 2 + "px";
-  fit.dataset.w = W; fit.dataset.h = H;
+  fit.style.marginLeft = -(W * k) / 2 + "px";
+  fit.style.marginTop = corsa ? "0" : -(H * k) / 2 + "px";
+  if (corsa) fit.style.top = "8px";
+  fit.dataset.k = k;
+  scorri();
 }
+const profilo = t => t < .12 ? 0 : t < .5 ? (1 - Math.cos(Math.PI * (t - .12) / .38)) / 2
+                  : t < .62 ? 1 : (1 + Math.cos(Math.PI * (t - .62) / .38)) / 2;
+function scorri(){
+  const fit = document.getElementById("brkfit");
+  if (!fit || !corsa || !lato) return;
+  const t = Math.min(1, (Date.now() - latoDal) / (ALTERNA_SEC * 1000));
+  fit.style.transform = `translateY(${-corsa * profilo(t)}px)`;
+}
+(function ciclo(){ scorri(); requestAnimationFrame(ciclo); })();
 window.addEventListener("resize", () => { if (S && S.fase === "ko") render(); });
 function m(p){
   const f = p.stato === "finita", g = f ? p.giochi : [];
