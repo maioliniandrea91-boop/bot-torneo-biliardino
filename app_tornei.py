@@ -43,7 +43,8 @@ import os
 import random
 import secrets
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -815,6 +816,8 @@ async def h_azione(req):
         if mancate:   # A: l'admin sa chi chiamare a voce
             testo = "📣 Da chiamare a voce (avviso privato non arrivato):\n" + "\n".join(
                 f"• {c} contro {avv} — biliardino {b}" for c, avv, b in mancate)
+            scade = datetime.now(ZoneInfo("Europe/Rome")) + timedelta(minutes=CANCELLA_DA_CHIAMARE_MIN)
+            testo += f"\n\n🕒 Si cancella da solo alle {scade:%H:%M}"
             for a in _admin_ids:
                 try:
                     msg = await bot.send_message(chat_id=a, text=testo)
