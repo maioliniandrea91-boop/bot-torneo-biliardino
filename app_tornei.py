@@ -26,6 +26,7 @@ COMANDI
            alla chat privata col bot)
 - /sonoio Nome  -> collega il proprio account al giocatore Nome
 - /scollega Nome -> (admin) toglie il collegamento di un giocatore
+- /avvisabili -> (admin) coppie raggiungibili in privato alle chiamate
 - /tv   -> (admin, in privato) link della pagina TV; "/tv nuovo" lo rigenera
 """
 
@@ -535,11 +536,20 @@ def _testo_giochi(giochi) -> str:
 
 
 def _avvisi_chiamata(s, partite) -> list:
+    """Avvisi (user_id, testo, chiamata). 'chiamata' = (coppia, avversario,
+    biliardino): serve a h_azione per dire all'admin chi non è stato avvisato.
+    Una coppia senza account collegati compare con user_id None."""
     avvisi = []
     for p in partite:
         for c, avv in ((p["a"], p["b"]), (p["b"], p["a"])):
-            for u in s["accessi"].get(c, ()):
-                avvisi.append((u, f"🎱 Tocca a voi! {c} contro {avv} — biliardino {p['biliardino']}"))
+            if c == M.BYE or avv == M.BYE:
+                continue
+            chiamata = (c, avv, p["biliardino"])
+            utenti = s["accessi"].get(c, ())
+            if not utenti:
+                avvisi.append((None, None, chiamata))
+            for u in utenti:
+                avvisi.append((u, f"🎱 Tocca a voi! {c} contro {avv} — biliardino {p['biliardino']}", chiamata))
     return avvisi
 
 
@@ -645,14 +655,91 @@ async def h_azione(req):
         msg = str(e) if isinstance(e, ValueError) else "Dati mancanti"
         return web.json_response({"ok": False, "errore": msg}, status=400)
     bot = req.app.get("bot")
-    for user_id, testo in r.pop("avvisi", []):
-        if bot is None:
-            continue
-        try:
-            await bot.send_message(chat_id=user_id, text=testo, reply_markup=_bottone_app())
-        except Exception:
-            pass  # utente che non ha mai avviato il bot in privato
+    if bot is not None:
+        avvisata: dict[tuple, bool] = {}   # chiamata -> almeno un account raggiunto
+        for user_id, testo, *chiamata in r.pop("avvisi", []):
+            ok = False
+            if user_id is not None:
+                try:
+                    await bot.send_message(chat_id=user_id, text=testo, reply_markup=_bottone_app())
+                    ok = True
+                except Exception:
+                    pass  # utente che non ha mai avviato il bot in privato
+            if chiamata:
+                avvisata[chiamata[0]] = avvisata.get(chiamata[0], False) or ok
+        mancate = [c for c, ok in avvisata.items() if not ok]
+        if mancate:   # A: l'admin sa chi chiamare a voce
+            testo = "📣 Da chiamare a voce (avviso privato non arrivato):\n" + "\n".join(
+                f"• {c} contro {avv} — biliardino {b}" for c, avv, b in mancate)
+            for a in _admin_ids:
+                try:
+                    await bot.send_message(chat_id=a, text=testo)
+                except Exception:
+                    pass
+        if d.get("azione") in ("prepara", "crea_gironi"):   # B: riepilogo copertura
+            testo = await riepilogo_avvisabili(bot, conn)
+            for a in _admin_ids:
+                try:
+                    await bot.send_message(chat_id=a, text=testo)
+                except Exception:
+                    pass
+    else:
+        r.pop("avvisi", None)
     return web.json_response(r)
+
+
+async def _raggiungibile(bot, user_id: int) -> bool:
+    """Telegram non dice se un utente ha avviato il bot: si prova un'azione
+    invisibile ("sta scrivendo..." per pochi secondi nella sua chat col bot)."""
+    try:
+        await bot.send_chat_action(chat_id=user_id, action="typing")
+        return True
+    except Exception:
+        return False
+
+
+async def riepilogo_avvisabili(bot, conn) -> str:
+    """B: quali coppie del torneo attivo riceveranno le chiamate in privato."""
+    s = carica(conn)
+    if s["torneo_id"] is None:
+        return "Nessun torneo attivo."
+    accessi = mappa_utenti(conn, s)
+    collegati = {gid for (gid,) in conn.execute("SELECT giocatore_id FROM giocatori_telegram")}
+    cache: dict[int, bool] = {}
+    ok, ko = [], []
+    for c in sorted(accessi):
+        raggiunti = []
+        for u in accessi[c]:
+            if u not in cache:
+                cache[u] = await _raggiungibile(bot, u)
+            if cache[u]:
+                raggiunti.append(u)
+        if raggiunti:
+            ok.append(c)
+            continue
+        if accessi[c]:
+            ko.append(f"• {c}: collegato ma non ha mai avviato il bot in privato (deve premere Avvia)")
+            continue
+        senza = []
+        for g in statistiche.dividi_coppia(c) or [c]:
+            row = statistiche.cerca_giocatore(conn, g)
+            if not row or row[0] not in collegati:
+                senza.append(g)
+        ko.append(f"• {c}: nessun account → serve /sonoio " + " o /sonoio ".join(senza))
+    tot = len(accessi)
+    testo = f"📲 Avvisi in privato — {s['nome']}: {len(ok)}/{tot} coppie avvisabili."
+    if ko:
+        testo += "\n\nNon avvisabili (da chiamare a voce):\n" + "\n".join(ko)
+    else:
+        testo += "\nTutte raggiungibili ✅"
+    return testo
+
+
+async def cmd_avvisabili(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        await _rispondi(update, context, "Comando riservato agli admin.")
+        return
+    await _rispondi(update, context, await riepilogo_avvisabili(context.bot, _conn()))
 
 
 def crea_web_app(bot=None) -> web.Application:
@@ -804,6 +891,7 @@ COMANDI_APP = [
     ("app", "Apre l'app torneo: gironi, partite, risultati"),
     ("sonoio", "Collega il tuo account al tuo nome giocatore — es. /sonoio Luca"),
     ("scollega", "[admin] Toglie il collegamento /sonoio di un giocatore — /scollega Luca"),
+    ("avvisabili", "[admin] Quali coppie ricevono le chiamate in privato e chi deve fare /sonoio"),
     ("tv", "[admin] Link della pagina TV del tabellone (/tv nuovo lo cambia)"),
 ]
 
@@ -816,3 +904,4 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando, token, admin
     app.add_handler(CommandHandler("tv", cmd_tv))
     app.add_handler(CommandHandler("sonoio", cmd_sonoio))
     app.add_handler(CommandHandler("scollega", cmd_scollega))
+    app.add_handler(CommandHandler("avvisabili", cmd_avvisabili))
