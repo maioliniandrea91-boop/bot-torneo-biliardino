@@ -26,6 +26,12 @@ Altri comandi:
   /programmate            -> locandine in attesa e ripubblicazioni attive
   /annullalocandina N     -> annulla la pubblicazione programmata n° N
                              o ferma le sue ripubblicazioni
+  /didascalia testo       -> cambia il testo aggiunto sotto la didascalia
+                             dell'ultima locandina pubblicata, modificando
+                             il post già nel gruppo (vale anche per le
+                             ripubblicazioni successive)
+  /didascalia N           -> idem sulla locandina n° N (il testo lo chiede)
+  /didascalia nessuno     -> toglie il testo aggiunto
 
 Le programmazioni sono salvate nel database: se il bot si riavvia
 (es. nuovo deploy su Railway) vengono ripristinate da sole.
@@ -622,6 +628,9 @@ async def risposta_privata(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if modo == "testo":
         await _salva_testo(update, context, lid, testo)
+    elif modo == "didascalia":
+        context.user_data.pop("locandina_attesa", None)
+        await update.message.reply_text(await _modifica_pubblicata(context.bot, lid, testo))
     else:
         await _salva_orario(update, context, lid, testo)
 
@@ -738,6 +747,74 @@ async def annullalocandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Nessuna locandina programmata o in ripubblicazione con n° {lid}.")
 
 
+async def _modifica_pubblicata(bot, lid: int, testo: str) -> str:
+    """Aggiorna il testo aggiunto di una locandina già pubblicata e modifica
+    la didascalia del post nel gruppo. Le ripubblicazioni useranno il nuovo testo."""
+    conn = _conn()
+    row = conn.execute(
+        "SELECT didascalia, msg_gruppo, torneo_ref, stato FROM locandine WHERE id = ?", (lid,)
+    ).fetchone()
+    if not row or row[3] != "pubblicata":
+        return f"La locandina n° {lid} non è pubblicata."
+    didascalia, msg_gruppo, torneo_ref, _ = row
+    extra = None if testo.lower() == "nessuno" else testo
+    completo = _testo_completo(didascalia, extra)
+    # riga "Iscritte X/18" solo se il torneo della locandina è ancora quello attivo
+    att = _torneo_attivo(conn)
+    if torneo_ref and att and att[0] == torneo_ref:
+        iscritte = conn.execute(
+            "SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_ref,)
+        ).fetchone()[0]
+        completo += f"\n\n{_riga_posti(iscritte, conn)}"
+    if len(completo) > LIMITE_DIDASCALIA:
+        return f"Troppo lungo: massimo {LIMITE_DIDASCALIA} caratteri di didascalia. Accorcialo."
+    gruppo = _gruppo(conn)
+    if gruppo is None or not msg_gruppo:
+        return "Non trovo il post nel gruppo (nessun gruppo registrato o messaggio sconosciuto)."
+    try:
+        await bot.edit_message_caption(chat_id=gruppo, message_id=msg_gruppo, caption=completo)
+    except Exception as e:
+        if "not modified" in str(e).lower():
+            return "Il testo è già quello: nessuna modifica."
+        return f"❌ Didascalia NON modificata: errore Telegram ({e}). Il post è stato cancellato a mano?"
+    conn.execute("UPDATE locandine SET extra = ? WHERE id = ?", (extra, lid))
+    conn.commit()
+    return f"✅ Didascalia della locandina n° {lid} aggiornata nel gruppo:\n\n{completo}"
+
+
+async def didascalia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/didascalia testo | /didascalia N | /didascalia nessuno"""
+    if not _is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Usalo in chat privata con il bot.")
+        return
+    # testo dopo il comando, con gli a capo
+    testo = (update.message.text or "").split(maxsplit=1)
+    testo = testo[1].strip() if len(testo) > 1 else ""
+    conn = _conn()
+    if testo.isdigit():
+        lid, testo = int(testo), ""
+    else:
+        row = conn.execute(
+            "SELECT id FROM locandine WHERE stato = 'pubblicata' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            await update.message.reply_text("Nessuna locandina pubblicata.")
+            return
+        lid = row[0]
+    if not testo:
+        context.user_data["locandina_attesa"] = ("didascalia", lid)
+        await update.message.reply_text(
+            f"Scrivi il testo da mettere sotto la didascalia della locandina n° {lid} "
+            "(anche su più righe). Sostituisce quello aggiunto prima.\n"
+            "'nessuno' lo toglie, 'annulla' lascia tutto com'è."
+        )
+        return
+    await update.message.reply_text(await _modifica_pubblicata(context.bot, lid, testo))
+
+
 async def ripristina_programmate(application):
     """All'avvio rimette in coda le pubblicazioni salvate nel database."""
     conn = _conn()
@@ -784,6 +861,7 @@ def registra(app, db_connect, is_admin, chiave_gruppo, admin_ids, max_squadre=18
     app.add_handler(CommandHandler("locandina", locandina))
     app.add_handler(CommandHandler("programmate", programmate))
     app.add_handler(CommandHandler("annullalocandina", annullalocandina))
+    app.add_handler(CommandHandler("didascalia", didascalia))
     app.add_handler(CallbackQueryHandler(bottoni, pattern=r"^loc:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, risposta_privata),
@@ -794,5 +872,6 @@ def registra(app, db_connect, is_admin, chiave_gruppo, admin_ids, max_squadre=18
 COMANDI_LOCANDINA = [
     ("locandina", "[admin] Crea la locandina — /locandina 16/10 volo [22:00] [25€] [premi COPPE]"),
     ("programmate", "[admin] Elenco locandine programmate"),
+    ("didascalia", "[admin] Cambia il testo sotto l'ultima locandina pubblicata — /didascalia testo"),
     ("annullalocandina", "[admin] Annulla una locandina programmata o ferma le ripubblicazioni — /annullalocandina N"),
 ]
