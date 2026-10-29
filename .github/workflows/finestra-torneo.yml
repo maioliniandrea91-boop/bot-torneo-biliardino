@@ -1,0 +1,20 @@
+# Blocca i deploy durante il torneo: Railway ("Wait for CI") pubblica solo se
+# questo controllo passa. Finestra vietata: venerdì 20:00 – sabato 05:00 (Roma).
+name: Finestra torneo
+on:
+  push:
+    branches: [main]
+jobs:
+  controllo-orario:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Niente deploy durante il torneo
+        run: |
+          giorno=$(TZ=Europe/Rome date +%u)   # 5 = venerdì, 6 = sabato
+          ora=$(TZ=Europe/Rome date +%H)
+          echo "Ora di Roma: $(TZ=Europe/Rome date '+%A %H:%M')"
+          if { [ "$giorno" = 5 ] && [ "$ora" -ge 20 ]; } || { [ "$giorno" = 6 ] && [ "$ora" -lt 5 ]; }; then
+            echo "::error::Torneo in corso (ven 20:00 - sab 05:00): deploy bloccato. Ripubblica dopo le 05:00 di sabato."
+            exit 1
+          fi
+          echo "Fuori dalla finestra del torneo: deploy consentito."
