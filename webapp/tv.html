@@ -54,6 +54,37 @@ td.pt{font-weight:800;color:var(--acc)}
 .gradino .nome{font-size:2.6em;margin-bottom:.3em}
 .gradino .base{background:var(--card2);border-radius:.6em .6em 0 0;display:flex;align-items:center;justify-content:center;font-size:4em}
 .vuoto{color:var(--hint);text-align:center;margin-top:20vh;font-size:2em}
+/* fase a eliminazione: tabellone a farfalla sopra, striscia con campi/prossime/ultimi sotto */
+.grid.kofase{grid-template-columns:1fr;grid-template-rows:1fr auto}
+.brkbox{min-height:0;background:var(--card);border-radius:.8em;padding:.6em;position:relative;overflow:hidden}
+.brkfit{position:absolute;left:50%;top:50%}
+.brk{position:relative;transform-origin:0 0}
+.brk svg{position:absolute;left:0;top:0}
+.brk path{fill:none;stroke:#3b6d6b;stroke-width:2}
+.brk .ch{position:absolute;top:0;width:190px;font:400 22px/1 "Bebas",Impact,sans-serif;letter-spacing:.06em;color:var(--hint);white-space:nowrap}
+.brk .ch.fin{color:var(--acc)}
+.bx{position:absolute;width:190px;height:60px;background:var(--card2);border-radius:10px;border:2px solid transparent;padding:5px 10px;display:grid;grid-template-rows:1fr 1fr;font-size:16px;line-height:1.1}
+.bx .r{display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0}
+.bx .r .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bx .r b{font-variant-numeric:tabular-nums}
+.bx .r.w{color:var(--ok);font-weight:800}.bx .r.l{color:var(--hint)}
+.bx .muted{color:var(--hint)}
+.bx.live{border-color:var(--acc);box-shadow:0 0 14px rgba(184,245,63,.35)}
+.bx.bye{opacity:.4}
+.bx .tag{position:absolute;top:-11px;left:10px;font-size:12px;font-weight:800;background:var(--acc);color:#06191a;border-radius:6px;padding:1px 6px}
+.bx .lt{position:absolute;right:-27px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;background:var(--ok);color:#06191a;font-size:13px;font-weight:900;display:grid;place-items:center}
+.bx .ltin{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--ok);color:#06191a;font-size:11px;font-weight:900;margin-right:5px;vertical-align:1px}
+.bx .cap{position:absolute;left:2px;bottom:-19px;font-size:12px;color:var(--hint);white-space:nowrap}
+.striscia{display:grid;grid-template-columns:2.2fr 1fr 1fr;gap:1em;align-items:start;font-size:.78em}
+.striscia h2{margin-bottom:.25em}
+.striscia .box{padding:.6em .9em}
+.striscia .lista .r{padding:.25em 0}
+.striscia .lista .r>span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.striscia .tav .lab{display:none}
+.striscia .campo{grid-auto-flow:column;grid-auto-columns:1fr}
+.striscia .tav{grid-template-columns:4.5em 1fr;padding:.6em .8em}
+.striscia .tav .n{font-size:2em}
+.striscia .vs{font-size:1.1em}
 </style>
 </head>
 <body>
@@ -86,6 +117,14 @@ function render(){
   if (!S.partite){ c.innerHTML = '<div class="vuoto" style="grid-column:1/-1">Il torneo sta per iniziare</div>'; return; }
   if (S.fase === "finito" && S.podio){ c.style.gridTemplateColumns="1fr"; c.innerHTML = podio(); return; }
   c.style.gridTemplateColumns = "";
+  if (S.fase === "ko"){
+    c.className = "grid kofase";
+    c.innerHTML = `<div class="brkbox" id="brkbox">${tabellone()}</div>
+      <div class="striscia">${campo()}${prossime()}${ultimi()}</div>`;
+    adatta();
+    return;
+  }
+  c.className = "grid";
   c.innerHTML = `<div class="col">${S.fase === "gironi" ? gironi() : tabellone()}</div><div class="col">${campo()}${prossime()}${ultimi()}</div>`;
 }
 
@@ -96,16 +135,86 @@ function gironi(){
   </table></div>`).join("")}</div>`;
 }
 
+/* Tabellone a farfalla (come il foglio del circolo): perdenti a sinistra,
+   vincenti a destra, finale in fondo a destra. Le lettere indicano dove
+   scende chi perde nel tabellone vincenti. Si adatta allo spazio (adatta()). */
 function tabellone(){
-  const col = (tab) => {
-    const turni = {};
-    S.partite.filter(p => p.tab === tab && !p.bye).forEach(p => (turni[p.etichetta] = turni[p.etichetta] || []).push(p));
-    return Object.entries(turni).map(([t, ps]) => `<div><h2>${esc(t.replace(" · turno ", " "))}</h2>${ps.map(m).join("")}</div>`).join("");
+  const P = {}; S.partite.filter(p => p.tab !== "G").forEach(p => P[p.id] = p);
+  const tutte = Object.values(P);
+  const W = tutte.filter(p => p.tab === "W"), L = tutte.filter(p => p.tab === "L"), F = P["F"];
+  const kW = Math.max(...W.map(p => p.turno)), kL = L.length ? Math.max(...L.map(p => p.turno)) : 0;
+  const CW = 190, BH = 60, GAP = 34, STEP = 78, HEAD = 40, MID = 24;
+  const idx = id => +id.split("-")[1] - 1;
+  const ord = (a, b) => a.turno - b.turno || idx(a.id) - idx(b.id);
+  const colX = {}; let x = 0;
+  for (let j = kL; j >= 1; j--){ colX["L" + j] = x; x += CW + GAP; }
+  x += MID;
+  for (let r = 1; r <= kW; r++){ colX["W" + r] = x; x += CW + GAP; }
+  colX.F = x; const larg = x + CW + 4;
+  const X = p => colX[p.tab === "F" ? "F" : p.tab + p.turno];
+  const lettera = {}; W.filter(p => p.turno >= 2).sort(ord).forEach((p, i) => lettera[p.id] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i] || "?");
+  const fontiLinea = q => [q.fonte_a, q.fonte_b].filter(f => f && P[f[1]] &&
+      (f[0] === "v" ? P[f[1]].tab === q.tab || q.tab === "F" && P[f[1]].tab === "W" : P[f[1]].tab === "W" && P[f[1]].turno === 1));
+  const y = {};
+  W.filter(p => p.turno === 1).forEach(p => y[p.id] = HEAD + idx(p.id) * STEP + STEP / 2);
+  [...W.filter(p => p.turno > 1), ...L].sort((a, b) => (a.tab === b.tab ? 0 : a.tab === "W" ? -1 : 1) || ord(a, b)).forEach(q => {
+    const src = fontiLinea(q).map(f => y[f[1]]).filter(v => v !== undefined);
+    y[q.id] = src.length ? src.reduce((a, b) => a + b, 0) / src.length : HEAD + STEP / 2;
+  });
+  if (F) y.F = y[F.fonte_a[1]];
+  const alt = Math.max(...Object.values(y)) + BH / 2 + 26;
+  let linee = "";
+  tutte.forEach(q => fontiLinea(q).forEach(f => {
+    const s = P[f[1]]; if (y[s.id] === undefined) return;
+    const dx = X(q) > X(s), x1 = dx ? X(s) + CW : X(s), x2 = dx ? X(q) : X(q) + CW, xm = (x1 + x2) / 2;
+    linee += `<path d="M${x1} ${y[s.id]}H${xm}V${y[q.id]}H${x2}"/>`;
+  }));
+  let h = "";
+  for (let j = 1; j <= kL; j++) h += `<div class="ch" style="left:${colX["L"+j]}px">${j === kL ? "Finale perdenti" : "Perdenti " + j}</div>`;
+  for (let r = 1; r <= kW; r++) h += `<div class="ch" style="left:${colX["W"+r]}px">${r === kW ? "Finale vincenti" : "Vincenti " + r}</div>`;
+  if (F) h += `<div class="ch fin" style="left:${colX.F}px">Finale</div>`;
+  const nome = (p, lato) => {
+    const c = p[lato];
+    if (c === "BYE") return `<span class="n muted"><i>BYE</i></span>`;
+    const f = p["fonte_" + lato], src = f && P[f[1]];
+    const lt = f && f[0] === "p" && lettera[f[1]] ? `<b class="ltin">${lettera[f[1]]}</b>` : "";
+    if (c) return `<span class="n">${lt}${esc(c)}</span>`;
+    if (!src) return `<span class="n muted">—</span>`;
+    if (f[0] === "p") return `<span class="n muted">${lt}Perdente</span>`;
+    return `<span class="n muted">${src.tab === "L" && p.tab === "F" ? "Vincente perdenti" : "…"}</span>`;
   };
-  const fin = S.partite.filter(p => p.tab === "F");
-  return `<div class="box"><h2>Tabellone vincenti</h2><div class="ko">${col("W")}</div></div>
-    <div class="box"><h2>Tabellone perdenti</h2><div class="ko">${col("L")}${fin.length ? `<div><h2>Finale</h2>${fin.map(m).join("")}</div>` : ""}</div></div>`;
+  const punti = (p, lato) => {
+    if (p.stato !== "finita" || p.bye || !p.giochi.length) return "";
+    const i = lato === "a" ? 0 : 1;
+    return p.giochi.length === 1 ? p.giochi[0][i] : p.giochi.filter(g => g[i] > g[1 - i]).length;
+  };
+  tutte.forEach(p => {
+    if (y[p.id] === undefined) return;
+    const fin = p.stato === "finita", cl = lato => fin && !p.bye ? (p.vincitore === p[lato] ? "w" : "l") : "";
+    const cap = p.tab === "F" ? "vincente 1° · perdente 2°"
+              : p.tab === "L" && p.turno === kL ? "vincente in finale · perdente 3°"
+              : p.tab === "L" && p.turno === kL - 1 ? "perdente 4°" : "";
+    h += `<div class="bx${p.stato==="in_corso"?" live":""}${p.bye?" bye":""}" style="left:${X(p)}px;top:${y[p.id] - BH/2}px">
+      ${p.stato === "in_corso" ? `<span class="tag">BILIARDINO ${p.biliardino}</span>` : ""}
+      <div class="r ${cl("a")}">${nome(p,"a")}<b>${punti(p,"a")}</b></div>
+      <div class="r ${cl("b")}">${nome(p,"b")}<b>${punti(p,"b")}</b></div>
+      ${lettera[p.id] ? `<span class="lt">${lettera[p.id]}</span>` : ""}${cap ? `<span class="cap">${cap}</span>` : ""}</div>`;
+  });
+  return `<div class="brkfit" id="brkfit" style="width:${larg}px;height:${alt}px"><div class="brk" id="brkin" style="width:${larg}px;height:${alt}px">
+    <svg width="${larg}" height="${alt}">${linee}</svg>${h}</div></div>`;
 }
+/* scala il tabellone per stare tutto nel riquadro, centrato */
+function adatta(){
+  const box = document.getElementById("brkbox"), fit = document.getElementById("brkfit"), inn = document.getElementById("brkin");
+  if (!box || !fit) return;
+  const W = parseFloat(fit.style.width), H = parseFloat(fit.style.height);
+  const k = Math.min((box.clientWidth - 16) / W, (box.clientHeight - 16) / H, 1.6);
+  inn.style.transform = `scale(${k})`;
+  fit.style.width = W * k + "px"; fit.style.height = H * k + "px";
+  fit.style.marginLeft = -(W * k) / 2 + "px"; fit.style.marginTop = -(H * k) / 2 + "px";
+  fit.dataset.w = W; fit.dataset.h = H;
+}
+window.addEventListener("resize", () => { if (S && S.fase === "ko") render(); });
 function m(p){
   const f = p.stato === "finita", g = f ? p.giochi : [];
   const va = g.filter(x=>x[0]>x[1]).length, vb = g.filter(x=>x[1]>x[0]).length;
