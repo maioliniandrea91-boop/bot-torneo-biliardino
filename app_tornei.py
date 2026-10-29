@@ -362,6 +362,7 @@ def vista(s: dict, uid: int | None = None) -> dict:
             "vantaggio_a": t["config"]["vantaggio_finale"] if p["tab"] == "F" else 0}
         partite.append({
             "id": p["id"], "tab": p["tab"], "turno": p["turno"], "girone": p["girone"],
+            "fonte_a": p.get("fonte_a"), "fonte_b": p.get("fonte_b"),
             "chiave_turno": M._chiave_turno(p), "etichetta": etichetta(p, t),
             "a": p["a"], "b": p["b"], "stato": p["stato"], "biliardino": p["biliardino"],
             "giochi": p["giochi"], "vincitore": p["vincitore"], "tavolino": p["tavolino"],

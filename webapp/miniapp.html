@@ -93,11 +93,33 @@ select{font:inherit;padding:7px 8px;border-radius:9px;border:1px solid var(--lin
 .prova span{flex:1;min-width:150px}
 .prova button{border:0;border-radius:9px;padding:7px 10px;background:#5c4500;color:#fff;font:600 13px inherit;font-family:inherit}
 .b small{font-weight:500;opacity:.85}
+/* tabellone a farfalla */
+.brk-wrap{overflow:auto;-webkit-overflow-scrolling:touch;background:var(--bg);border-radius:var(--r);padding:10px 8px 18px;overscroll-behavior-x:contain}
+.brk{position:relative}
+.brk svg{position:absolute;left:0;top:0;pointer-events:none}
+.brk path{fill:none;stroke:color-mix(in srgb,var(--tx) 28%,transparent);stroke-width:1.5}
+.brk .ch{position:absolute;top:0;width:158px;font-size:11px;font-weight:700;color:var(--hint);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.brk .ch.fin{color:var(--acc)}
+.bx{position:absolute;width:158px;height:52px;background:var(--bg2);border:1.5px solid var(--line);border-radius:9px;padding:4px 8px;display:grid;grid-template-rows:1fr 1fr;font-size:12.5px;line-height:1.1}
+.bx.ck{cursor:pointer}.bx.ck:active{transform:scale(.98)}
+.bx .r{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}
+.bx .r .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bx .r b{font-variant-numeric:tabular-nums}
+.bx .r.w{font-weight:700;color:var(--ok)}.bx .r.l{color:var(--hint)}
+.bx.live{border-color:var(--acc);box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 22%,transparent)}
+.bx.mine{background:color-mix(in srgb,var(--acc) 13%,var(--bg))}
+.bx.bye{opacity:.5}
+.bx .tag{position:absolute;top:-9px;left:8px;font-size:9.5px;font-weight:700;background:var(--acc);color:#fff;border-radius:6px;padding:1px 5px}
+.bx .tag.warn{background:var(--warn)}
+.bx .lt{position:absolute;right:-22px;top:50%;transform:translateY(-50%);width:18px;height:18px;border-radius:50%;background:var(--teal);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center}
+.bx .ltin{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;background:var(--teal);color:#fff;font-size:9.5px;margin-right:4px;vertical-align:1px}
+.bx .cap{position:absolute;left:2px;bottom:-15px;font-size:9.5px;color:var(--hint);white-space:nowrap}
 /* ---- PC (Telegram Desktop / finestre larghe) ---- */
 @media (min-width: 900px){
   .brand,nav,.prova{padding-left:max(16px,calc((100% - 1280px)/2));padding-right:max(16px,calc((100% - 1280px)/2))}
   nav button{flex:0 1 200px}
   main{max-width:1280px;margin:0 auto;padding:16px 16px 0}
+  main.v-tabellone{max-width:none}   /* il tabellone usa tutta la finestra */
   /* partite: card affiancate */
   main.v-partite section{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;align-items:start}
   main.v-partite section>:not(.card){grid-column:1/-1}
@@ -252,8 +274,17 @@ function render(){
     : (S.prova ? "<span>🧪 Torneo di prova</span>" : "");
   $("#prova").style.display = S.prova ? "flex" : "none";
   $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
+  const brkPrima = $("#brk"), scrollPrima = brkPrima ? brkPrima.scrollLeft : null;
   $("#main").className = "v-" + tab;
   $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa})[tab]();
+  const brk = $("#brk");
+  if (brk){
+    if (scrollPrima !== null) brk.scrollLeft = scrollPrima;
+    else {   // prima apertura: parti dal 1° turno vincenti (il centro della farfalla)
+      const w1 = [...brk.querySelectorAll(".ch")].find(e => e.textContent.startsWith("Vincenti 1") || e.textContent === "Finale vincenti");
+      if (w1 && brk.scrollWidth > brk.clientWidth) brk.scrollLeft = Math.max(0, w1.offsetLeft - 40);
+    }
+  }
 }
 function vai(k){ tab = k; render(); window.scrollTo(0,0); }
 
@@ -296,9 +327,100 @@ function vGironi(){
   </table></div></section>`).join("") + '<p class="muted" style="margin:0 6px">Vittoria 3 pt · vittoria di un gol 2-1 · parità: differenza gol, scontro diretto, sorteggio.</p>';
 }
 
+let modoTab = "grafico";   // grafico (a farfalla) | elenco
+let brkAdatta = false;     // tabellone rimpicciolito per stare tutto nello schermo
 function vTabellone(){
-  const P = S.partite.filter(p => p.tab !== "G");
   let h = S.fase === "finito" && S.podio ? vPodio() : "";
+  h += `<section><div class="seg">${[["grafico","Tabellone"],["elenco","Elenco partite"]].map(([k,n]) =>
+    `<button class="${modoTab===k?"on":""}" onclick="modoTab='${k}';render()">${n}</button>`).join("")}</div></section>`;
+  return h + (modoTab === "grafico" ? vBracket() : vElencoKO());
+}
+
+/* Tabellone a farfalla: perdenti a sinistra, vincenti a destra, finale in fondo a destra.
+   Le lettere (A, B, C…) dicono dove scende chi perde nel tabellone vincenti. */
+function vBracket(){
+  const P = {}; S.partite.filter(p => p.tab !== "G").forEach(p => P[p.id] = p);
+  const tutte = Object.values(P);
+  if (!tutte.length) return '<div class="empty">Tabellone non ancora creato.</div>';
+  const W = tutte.filter(p => p.tab === "W"), L = tutte.filter(p => p.tab === "L"), F = P["F"];
+  const kW = Math.max(...W.map(p => p.turno)), kL = L.length ? Math.max(...L.map(p => p.turno)) : 0;
+  const CW = 158, BH = 52, GAP = 28, STEP = 66, HEAD = 34, MID = 18;
+  const idx = id => +id.split("-")[1] - 1;
+  const ord = (a, b) => a.turno - b.turno || idx(a.id) - idx(b.id);
+  // colonne: Perdenti kL … 1 | Vincenti 1 … kW | Finale
+  const colX = {}; let x = 0;
+  for (let j = kL; j >= 1; j--){ colX["L" + j] = x; x += CW + GAP; }
+  x += MID;
+  for (let r = 1; r <= kW; r++){ colX["W" + r] = x; x += CW + GAP; }
+  colX.F = x; const larg = x + CW + 8;
+  const X = p => colX[p.tab === "F" ? "F" : p.tab + p.turno];
+  // lettere: perdenti dei turni vincenti dal 2° in poi
+  const lettera = {}; W.filter(p => p.turno >= 2).sort(ord).forEach((p, i) => lettera[p.id] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i] || "?");
+  // fonti "di linea" (stesso lato): vincente dal turno prima, o perdente del 1° turno vincenti
+  const fontiLinea = q => [q.fonte_a, q.fonte_b].filter(f => f && P[f[1]] &&
+      (f[0] === "v" ? P[f[1]].tab === q.tab || q.tab === "F" && P[f[1]].tab === "W" : P[f[1]].tab === "W" && P[f[1]].turno === 1));
+  const y = {};
+  W.filter(p => p.turno === 1).forEach(p => y[p.id] = HEAD + idx(p.id) * STEP + STEP / 2);
+  [...W.filter(p => p.turno > 1), ...L].sort((a, b) => (a.tab === b.tab ? 0 : a.tab === "W" ? -1 : 1) || ord(a, b)).forEach(q => {
+    const src = fontiLinea(q).map(f => y[f[1]]).filter(v => v !== undefined);
+    y[q.id] = src.length ? src.reduce((a, b) => a + b, 0) / src.length : HEAD + STEP / 2;
+  });
+  if (F) y.F = y[F.fonte_a[1]];
+  const alt = Math.max(...Object.values(y)) + BH / 2 + 26;
+  // linee
+  let linee = "";
+  tutte.forEach(q => fontiLinea(q).forEach(f => {
+    const s = P[f[1]]; if (y[s.id] === undefined) return;
+    const versoDx = X(q) > X(s);               // vincenti e finale: da sinistra a destra
+    const x1 = versoDx ? X(s) + CW : X(s), x2 = versoDx ? X(q) : X(q) + CW, xm = (x1 + x2) / 2;
+    linee += `<path d="M${x1} ${y[s.id]}H${xm}V${y[q.id]}H${x2}"/>`;
+  }));
+  // intestazioni
+  let h = "";
+  for (let j = 1; j <= kL; j++) h += `<div class="ch" style="left:${colX["L"+j]}px">${j === kL ? "Finale perdenti" : "Perdenti " + j}</div>`;
+  for (let r = 1; r <= kW; r++) h += `<div class="ch" style="left:${colX["W"+r]}px">${r === kW ? "Finale vincenti" : "Vincenti " + r}</div>`;
+  if (F) h += `<div class="ch fin" style="left:${colX.F}px">Finale</div>`;
+  const nome = (p, lato) => {
+    const c = p[lato];
+    if (c === "BYE") return `<span class="n muted"><i>BYE</i></span>`;
+    const f = p["fonte_" + lato], src = f && P[f[1]];
+    const lt = f && f[0] === "p" && lettera[f[1]] ? `<b class="ltin">${lettera[f[1]]}</b>` : "";
+    if (c) return `<span class="n">${lt}${esc(c)}</span>`;
+    if (!src) return `<span class="n muted">—</span>`;
+    if (f[0] === "p") return `<span class="n muted">${lt || ""}Perdente ${lettera[f[1]] ? "" : "turno prima"}</span>`;
+    return `<span class="n muted">${src.tab === "L" && p.tab === "F" ? "Vincente perdenti" : "…"}</span>`;
+  };
+  const punti = (p, lato) => {
+    if (p.stato !== "finita" || p.bye || !p.giochi.length) return "";
+    const i = lato === "a" ? 0 : 1;
+    return p.giochi.length === 1 ? p.giochi[0][i] : p.giochi.filter(g => g[i] > g[1 - i]).length;
+  };
+  const cliccabile = p => p.a && p.b && !p.bye && (admin() || (eMia(p) && p.stato !== "finita"));
+  tutte.forEach(p => {
+    if (y[p.id] === undefined) return;
+    const fin = p.stato === "finita", cl = lato => fin && !p.bye ? (p.vincitore === p[lato] ? "w" : "l") : "";
+    const tag = p.stato === "in_corso" ? `<span class="tag">Biliardino ${p.biliardino}</span>`
+              : p.proposta && !fin ? `<span class="tag warn">Da confermare</span>` : "";
+    const cap = p.tab === "F" ? "vincente 1° · perdente 2°"
+              : p.tab === "L" && p.turno === kL ? "vincente in finale · perdente 3°"
+              : p.tab === "L" && p.turno === kL - 1 ? "perdente 4°" : "";
+    h += `<div class="bx${p.stato==="in_corso"?" live":""}${eMia(p)?" mine":""}${p.bye?" bye":""}${cliccabile(p)?" ck":""}"
+      style="left:${X(p)}px;top:${y[p.id] - BH/2}px" ${cliccabile(p) ? `onclick="apriRisultato('${p.id}')"` : ""}>
+      ${tag}<div class="r ${cl("a")}">${nome(p,"a")}<b>${punti(p,"a")}</b></div>
+      <div class="r ${cl("b")}">${nome(p,"b")}<b>${punti(p,"b")}</b></div>
+      ${lettera[p.id] ? `<span class="lt">${lettera[p.id]}</span>` : ""}${cap ? `<span class="cap">${cap}</span>` : ""}</div>`;
+  });
+  const spazio = Math.max(200, ($("#main").clientWidth || window.innerWidth) - 40);
+  const f = brkAdatta ? Math.min(1, spazio / larg) : 1;
+  const zoom = larg > spazio ? `<button class="b" style="margin:0 0 8px" onclick="brkAdatta=!brkAdatta;render()">${brkAdatta ? "🔍 Ingrandisci" : "⤢ Vedi tutto il tabellone"}</button>` : "";
+  return `${zoom}<div class="brk-wrap" id="brk"><div style="width:${larg*f}px;height:${alt*f}px"><div class="brk" style="width:${larg}px;height:${alt}px;transform:scale(${f});transform-origin:0 0">
+    <svg width="${larg}" height="${alt}"><g>${linee}</g></svg>${h}</div></div></div>
+    <p class="muted" style="margin:8px 6px">A sinistra il tabellone perdenti, a destra i vincenti. La lettera accanto a una partita dei vincenti indica dove scende chi perde. ${admin() ? "Tocca una partita per inserire o correggere il risultato." : "Tocca la tua partita per inserire il risultato."}</p>`;
+}
+
+function vElencoKO(){
+  const P = S.partite.filter(p => p.tab !== "G");
+  let h = "";
   const gruppi = {};
   P.forEach(p => { (gruppi[p.etichetta] = gruppi[p.etichetta] || []).push(p); });
   const ordine = Object.keys(gruppi);
