@@ -270,7 +270,7 @@ function render(){
   if (!schede.length) schede.push(["attesa","Torneo"]);
   if (!tab || !schede.some(s=>s[0]===tab)) tab = schede[0][0];
   $("#prova").innerHTML = S.prova && veroAdmin()
-    ? `<span>🧪 Torneo di prova — ${vistaGiocatore ? "vista giocatore" : "vista admin"}</span><button onclick="cambiaVista()">${vistaGiocatore ? "Torna admin" : "👤 Vista giocatore"}</button>${!vistaGiocatore && ["gironi","ko"].includes(S.fase) ? '<button onclick="simula()">🎲 Simula giro</button>' : ""}`
+    ? `<span>🧪 Torneo di prova — ${vistaGiocatore ? "vista giocatore" : "vista admin"}</span><button onclick="cambiaVista()">${vistaGiocatore ? "Torna admin" : "👤 Vista giocatore"}</button>${!vistaGiocatore && ["gironi","ko"].includes(S.fase) ? '<button onclick="simula()">🎲 Simula giro</button>' : ""}${!vistaGiocatore && S.fase === "gironi" ? '<button onclick="completaGironi()">⏩ Completa gironi</button>' : ""}`
     : (S.prova ? "<span>🧪 Torneo di prova</span>" : "");
   $("#prova").style.display = S.prova ? "flex" : "none";
   $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
@@ -575,6 +575,7 @@ async function confermaAdmin(pid, quale){
   await azione({azione:"risultato", pid, giochi}, "Risultato registrato");
 }
 async function simula(){ await azione({azione:"simula"}, "Giro simulato"); }
+async function completaGironi(){ await azione({azione:"completa_gironi"}, "Gironi completati: crea il tabellone"); }
 function cambiaVista(){ vistaGiocatore = !vistaGiocatore; tab = null; render(); window.scrollTo(0,0); }
 async function conferma(pid){ await azione({azione:"conferma", pid}, "Risultato confermato"); }
 async function contesta(pid){ if (await chiedi("Contesti il risultato? Deciderà l'admin.")) await azione({azione:"contesta", pid}, "Segnalato all'admin"); }

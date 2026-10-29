@@ -89,7 +89,7 @@ NOMI_PROVA = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "H
 AZIONI_ADMIN = {"prepara", "anteprima_gironi", "crea_gironi", "imposta", "formato",
                 "avvia", "ferma", "chiama", "risultato", "ritira", "crea_tabellone",
                 "ricomincia", "sospendi", "riattiva", "assente", "simula",
-                "annulla_gironi", "annulla_tabellone"}
+                "annulla_gironi", "annulla_tabellone", "completa_gironi"}
 AZIONI_COPPIA = {"proponi", "conferma", "contesta"}
 
 _db_connect = None
@@ -125,6 +125,12 @@ def crea_tabelle(conn):
         CREATE TABLE IF NOT EXISTS app_messaggi (
             torneo_id INTEGER, pid TEXT, tipo TEXT,      -- chiamata | risultato
             chat_id INTEGER, message_id INTEGER, creato_il TEXT
+        )
+    """)
+    # cancellazioni a tempo: salvate su DB perché la job queue si perde a ogni riavvio/deploy
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_cancella (
+            chat_id INTEGER, message_id INTEGER, scade TEXT
         )
     """)
     conn.commit()
@@ -422,7 +428,7 @@ def esegui(conn, uid: int, d: dict) -> dict:
     if s["torneo_id"] is None:
         raise ValueError("Nessun torneo attivo")
     prova = s.get("prova") is not None
-    if az == "simula" and not prova:
+    if az in ("simula", "completa_gironi") and not prova:
         raise ValueError("Simulazione disponibile solo in modalità prova")
     if az == "prepara" and prova:
         raise ValueError("In prova le coppie sono già caricate")
@@ -473,6 +479,9 @@ def esegui(conn, uid: int, d: dict) -> dict:
 
     elif az == "simula":
         _simula_prova(t, proposte, s)
+
+    elif az == "completa_gironi":
+        _completa_gironi(t, proposte)
 
     elif az == "annulla_tabellone":
         M.annulla_tabellone(t)
@@ -610,6 +619,34 @@ def esegui(conn, uid: int, d: dict) -> dict:
     return risposta
 
 
+def _giochi_casuali(rng, gol: int, bo: int, vant: int = 0) -> list[tuple[int, int]]:
+    """Punteggi casuali validi; ~1 su 4 vinta con un gol di scarto (golden gol)."""
+    giochi, va, vb = [], 0, 0
+    while max(va, vb) < bo // 2 + 1:
+        perso = gol - 1 if rng.random() < .25 else rng.randint(0, gol - 2)
+        if rng.random() < .5:
+            giochi.append((gol, perso)); va += 1
+        else:
+            giochi.append((max(perso, vant), gol)); vb += 1
+    return giochi
+
+
+def _completa_gironi(t: dict, proposte: dict) -> None:
+    """Solo prova: risultati casuali a tutte le partite dei gironi non ancora
+    finite (in campo, in attesa, in stand-by). Il tabellone lo crea l'admin."""
+    if t["fase"] != "gironi":
+        raise ValueError("Disponibile solo durante i gironi")
+    rng = random.Random()
+    aperte = sorted((p for p in t["partite"].values() if p["tab"] == "G" and p["stato"] != "finita"),
+                    key=lambda p: p["ordine"])
+    if not aperte:
+        raise ValueError("Gironi già completi: crea il tabellone")
+    t["assenti"] = {}                       # nessun blocco residuo nella prova
+    for p in aperte:
+        M.registra(t, p["id"], _giochi_casuali(rng, t["config"]["gol"], 1))
+        proposte.pop(p["id"], None)
+
+
 def _simula_prova(t: dict, proposte: dict, s: dict) -> None:
     """Solo prova: chiama le partite e mette punteggi casuali a quelle in campo.
     La partita della coppia dell'admin riceve una proposta dell'avversario (da
@@ -627,16 +664,9 @@ def _simula_prova(t: dict, proposte: dict, s: dict) -> None:
     for i, p in enumerate(in_campo):
         if p["id"] in proposte:
             continue
-        a_giochi = []
         regole = p["regole"] or {"gol": t["config"]["gol"], "al_meglio_di": M._al_meglio_di(t, p),
                                  "vantaggio_a": 0}
-        gol, bo, vant = regole["gol"], regole["al_meglio_di"], regole.get("vantaggio_a", 0)
-        va = vb = 0
-        while max(va, vb) < bo // 2 + 1:
-            if rng.random() < .5:
-                a_giochi.append((gol, rng.randint(0, gol - 1))); va += 1
-            else:
-                a_giochi.append((rng.randint(vant, gol - 1), gol)); vb += 1
+        a_giochi = _giochi_casuali(rng, regole["gol"], regole["al_meglio_di"], regole.get("vantaggio_a", 0))
         if {p["a"], p["b"]} & mie:
             da = p["b"] if p["a"] in mie else p["a"]
         elif i % 3 == 0:
@@ -935,7 +965,7 @@ async def cmd_provatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• L'app e la pagina TV mostrano la PROVA al posto del torneo vero, per tutti.\n"
         "• Il torneo vero non viene toccato: iscrizioni, lista, statistiche, Elo e medagliere restano come sono.\n"
         "• Gli avvisi arrivano solo a te.\n"
-        "• In Gestione trovi «🎲 Simula giro» (punteggi casuali) e «👤 Vista giocatore».\n"
+        "• In Gestione trovi «🎲 Simula giro», «⏩ Completa gironi» (punteggi casuali) e «👤 Vista giocatore».\n"
         f"• Chiudi con /fineprova (si chiude da sola dopo {DURATA_PROVA_ORE} ore).",
         reply_markup=_bottone_app(),
     )
@@ -960,20 +990,47 @@ async def cmd_avvisabili(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _cancella_dopo(jq, bot, chat_id: int, message_id: int, secondi: int) -> None:
-    """Cancella un messaggio del bot dopo 'secondi'. Con la job queue del bot
-    se c'è; altrimenti un task asyncio. Se il bot si riavvia nel frattempo il
-    messaggio resta (pazienza: è solo un promemoria)."""
+    """Cancella un messaggio del bot dopo 'secondi'. La scadenza è salvata su DB:
+    se il bot si riavvia (deploy), riprende_cancellazioni la riprogramma."""
+    scade = datetime.now() + timedelta(seconds=secondi)
+    conn = _conn()
+    conn.execute("INSERT INTO app_cancella VALUES (?, ?, ?)", (chat_id, message_id, scade.isoformat()))
+    conn.commit()
+    _programma_cancella(jq, bot, chat_id, message_id, secondi)
+
+
+def _programma_cancella(jq, bot, chat_id: int, message_id: int, secondi: float) -> None:
     if jq is not None:
-        jq.run_once(_elimina, secondi, data=(chat_id, message_id))
+        jq.run_once(_elimina_salvato, max(secondi, 1), data=(chat_id, message_id))
         return
 
     async def _dopo():
-        await asyncio.sleep(secondi)
-        try:
-            await bot.delete_message(chat_id, message_id)
-        except Exception:
-            pass
+        await asyncio.sleep(max(secondi, 1))
+        await _cancella_salvato(bot, chat_id, message_id)
     asyncio.get_running_loop().create_task(_dopo())
+
+
+async def _cancella_salvato(bot, chat_id: int, message_id: int) -> None:
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass   # già cancellato a mano o più vecchio di 48 ore
+    conn = _conn()
+    conn.execute("DELETE FROM app_cancella WHERE chat_id = ? AND message_id = ?", (chat_id, message_id))
+    conn.commit()
+
+
+async def _elimina_salvato(context: ContextTypes.DEFAULT_TYPE):
+    await _cancella_salvato(context.bot, *context.job.data)
+
+
+def riprendi_cancellazioni(jq, bot) -> None:
+    """All'avvio: riprogramma le cancellazioni rimaste in sospeso (quelle già
+    scadute partono subito)."""
+    adesso = datetime.now()
+    for chat_id, mid, scade in _conn().execute("SELECT chat_id, message_id, scade FROM app_cancella"):
+        resto = (datetime.fromisoformat(scade) - adesso).total_seconds()
+        _programma_cancella(jq, bot, chat_id, mid, resto)
 
 
 def crea_web_app(bot=None, jq=None) -> web.Application:
@@ -995,6 +1052,7 @@ async def avvia_server(application):
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORTA).start()
     application.bot_data["web_runner"] = runner
+    riprendi_cancellazioni(application.job_queue, application.bot)
     url = url_pubblico()
     print(f"Server web app tornei sulla porta {PORTA} — {url or 'PUBLIC_URL non impostata'}")
     if url:   # bottone "Torneo" accanto alla tastiera nelle chat private col bot
