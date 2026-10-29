@@ -3,9 +3,10 @@
 name: Controlli prima del deploy
 on:
   push:
-    branches: [main]
+    branches: [main, app-tornei]
 jobs:
   controllo-orario:
+    if: github.ref == 'refs/heads/main'   # sul ramo di sviluppo contano solo i test
     runs-on: ubuntu-latest
     steps:
       - name: Niente deploy durante il torneo
