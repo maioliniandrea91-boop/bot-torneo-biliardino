@@ -114,6 +114,33 @@ async def test_backup():
     print("backup ok")
 
 
+def test_ripristino():
+    """File valido -> riepilogo; file non valido -> errore; ripristino sostituisce i dati."""
+    d = tempfile.mkdtemp()
+    buono, vivo = os.path.join(d, "buono.db"), os.path.join(d, "vivo.db")
+    for p, n in ((buono, 3), (vivo, 1)):
+        c = sqlite3.connect(p)
+        c.execute("CREATE TABLE tornei (id INTEGER PRIMARY KEY, nome TEXT, chiuso INTEGER)")
+        c.execute("CREATE TABLE squadre (torneo_id INTEGER)")
+        c.execute("CREATE TABLE stato (chiave TEXT PRIMARY KEY, valore TEXT)")
+        c.executemany("INSERT INTO tornei (nome, chiuso) VALUES (?, 1)", [(f"T{i}",) for i in range(n)])
+        c.commit()
+        c.close()
+    assert "3 tornei" in S._riepilogo(buono)
+    falso = os.path.join(d, "falso.db")
+    open(falso, "wb").write(b"non sono un database" * 50)
+    for p in (falso,):
+        try:
+            S._riepilogo(p)
+            raise SystemExit("ERRORE: file non valido accettato")
+        except ValueError:
+            pass
+    src, dst = sqlite3.connect(buono), sqlite3.connect(vivo)
+    src.backup(dst)
+    assert dst.execute("SELECT COUNT(*) FROM tornei").fetchone()[0] == 3
+    print("ripristino ok")
+
+
 if __name__ == "__main__":
     c = avvia()
     test_completa_gironi_e_pdf(c)
@@ -121,4 +148,5 @@ if __name__ == "__main__":
     test_avviso_voce()
     asyncio.run(test_cancellazioni(c))
     asyncio.run(test_backup())
+    test_ripristino()
     print("tutti i test superati")

@@ -6,7 +6,11 @@
   canale privato collegato, solo se qualcosa è cambiato dall'ultimo backup.
   /backup -> backup subito (o istruzioni per collegare il canale)
   /backup canale -> collega un altro canale
+- Ripristino: inoltra al bot (in privato) un file di backup .db dal canale →
+  il bot lo controlla, mostra cosa contiene e chiede conferma; prima di
+  sostituire fa un backup di sicurezza del database attuale, poi si riavvia.
 """
+import asyncio
 import hashlib
 import os
 import sqlite3
@@ -16,9 +20,10 @@ import traceback
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import Conflict, NetworkError, TimedOut
-from telegram.ext import ApplicationHandlerStop, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, ContextTypes,
+                          MessageHandler, filters)
 
 ROMA = ZoneInfo("Europe/Rome")
 ORARIO_BACKUP = time(hour=6, minute=0, tzinfo=ROMA)   # dopo la fine dei tornei (sab 05)
@@ -88,7 +93,7 @@ def _impronta(conn) -> str:
     return h.hexdigest()
 
 
-async def esegui_backup(bot, forzato: bool = False) -> str:
+async def esegui_backup(bot, forzato: bool = False, nota: str = "") -> str:
     conn = _db_connect()
     canale = _leggi(conn, CHIAVE_CANALE)
     if not canale:
@@ -106,7 +111,7 @@ async def esegui_backup(bot, forzato: bool = False) -> str:
     with open(percorso, "rb") as f:
         await bot.send_document(int(canale), f, filename=os.path.basename(percorso),
                                 caption=f"💾 Backup {adesso:%d/%m/%Y %H:%M} · {tornei} tornei · "
-                                        f"{os.path.getsize(percorso) // 1024} KB")
+                                        f"{os.path.getsize(percorso) // 1024} KB" + (f"\n{nota}" if nota else ""))
     os.remove(percorso)
     _scrivi(conn, CHIAVE_HASH, impronta)
     return "inviato"
@@ -159,13 +164,112 @@ async def ricevi_inoltro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raise ApplicationHandlerStop
 
 
-COMANDI_SERVIZIO = [("backup", "[admin] Backup del database nel canale privato (/backup canale per cambiarlo)")]
+# ======================= RIPRISTINO =======================
+
+def _riepilogo(percorso: str) -> str:
+    """Controlla che il file sia un database del bot integro; ritorna un riepilogo.
+    ValueError se non va bene."""
+    try:
+        c = sqlite3.connect(f"file:{percorso}?mode=ro", uri=True)
+        if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise ValueError("file danneggiato")
+        tabelle = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not {"tornei", "squadre", "stato"} <= tabelle:
+            raise ValueError("non è un database del bot")
+        n_tornei = c.execute("SELECT COUNT(*) FROM tornei").fetchone()[0]
+        ultimo = c.execute("SELECT nome, chiuso FROM tornei ORDER BY id DESC LIMIT 1").fetchone()
+        squadre = c.execute("SELECT COUNT(*) FROM squadre WHERE torneo_id = "
+                            "(SELECT MAX(id) FROM tornei)").fetchone()[0]
+    except sqlite3.DatabaseError:
+        raise ValueError("non è un database valido")
+    righe = [f"• {n_tornei} tornei in archivio"]
+    if ultimo:
+        righe.append(f"• ultimo torneo: «{ultimo[0]}» ({'chiuso' if ultimo[1] else 'attivo'}, "
+                     f"{squadre} coppie iscritte)")
+    if "giocatori" in tabelle:
+        righe.append(f"• {c.execute('SELECT COUNT(*) FROM giocatori').fetchone()[0]} giocatori in anagrafica")
+    if "sfide" in tabelle:
+        righe.append(f"• {c.execute('SELECT COUNT(*) FROM sfide').fetchone()[0]} sfidine registrate")
+    return "\n".join(righe)
+
+
+async def cmd_ripristina(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id) or update.effective_chat.type != "private":
+        return
+    await update.message.reply_text(
+        "♻️ Per ripristinare: apri il canale dei backup, scegli il backup da recuperare "
+        "e inoltralo qui. Ti mostro cosa contiene e ti chiedo conferma prima di toccare qualcosa.")
+
+
+async def ricevi_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        return
+    doc = update.message.document
+    percorso = os.path.join(tempfile.mkdtemp(), "ripristino.db")
+    f = await context.bot.get_file(doc.file_id)
+    await f.download_to_drive(percorso)
+    try:
+        riepilogo = _riepilogo(percorso)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ Non posso usare questo file: {e}.")
+        raise ApplicationHandlerStop
+    context.user_data["ripristino"] = percorso
+    await update.message.reply_text(
+        f"♻️ Backup «{doc.file_name}»:\n{riepilogo}\n\n"
+        "Se confermi, il database attuale viene SOSTITUITO da questo (prima ne salvo una copia "
+        "nel canale) e il bot si riavvia (circa 1 minuto).",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Ripristina", callback_data="ripr:ok"),
+            InlineKeyboardButton("Annulla", callback_data="ripr:no")]]))
+    raise ApplicationHandlerStop
+
+
+async def conferma_ripristino(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    percorso = context.user_data.pop("ripristino", None)
+    if not _is_admin(q.from_user.id) or q.data != "ripr:ok" or not percorso or not os.path.exists(percorso):
+        await q.edit_message_text("Ripristino annullato." if q.data == "ripr:no"
+                                  else "Ripristino non più valido: inoltra di nuovo il backup.")
+        return
+    conn = _db_connect()
+    canale = _leggi(conn, CHIAVE_CANALE)
+    try:
+        sicurezza = await esegui_backup(context.bot, forzato=True, nota="⚠️ copia di sicurezza prima di un ripristino")
+    except Exception as e:
+        await q.edit_message_text(f"❌ Backup di sicurezza non riuscito ({e}): ripristino annullato.")
+        return
+    origine = sqlite3.connect(percorso)
+    destinazione = sqlite3.connect(_db_path)
+    origine.backup(destinazione)          # sostituisce il contenuto in modo atomico
+    origine.close()
+    destinazione.close()
+    conn = _db_connect()
+    if canale:                            # il canale dei backup resta quello attuale
+        _scrivi(conn, CHIAVE_CANALE, canale)
+    conn.execute("DELETE FROM stato WHERE chiave = ?", (CHIAVE_HASH,))
+    conn.commit()
+    await q.edit_message_text(
+        f"✅ Database ripristinato (copia di sicurezza: {sicurezza}). Riavvio il bot: "
+        "tra circa un minuto è di nuovo operativo.")
+    # riavvio: Railway riavvia il servizio uscito con errore (riprogramma locandine, avvisi, ecc.)
+    asyncio.get_running_loop().call_later(3, os._exit, 1)
+
+
+COMANDI_SERVIZIO = [
+    ("backup", "[admin] Backup del database nel canale privato (/backup canale per cambiarlo)"),
+    ("ripristina", "[admin] Come ripristinare un backup (inoltra il file .db al bot)"),
+]
 
 
 def registra(app, db_connect, db_path, is_admin, admin_ids):
     global _db_connect, _db_path, _is_admin, _admin_ids
     _db_connect, _db_path, _is_admin, _admin_ids = db_connect, db_path, is_admin, set(admin_ids)
     app.add_handler(CommandHandler("backup", cmd_backup))
+    app.add_handler(CommandHandler("ripristina", cmd_ripristina))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.Document.FileExtension("db"),
+                                   ricevi_backup), group=-2)
+    app.add_handler(CallbackQueryHandler(conferma_ripristino, pattern=r"^ripr:"))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.FORWARDED, ricevi_inoltro), group=-1)
     app.add_error_handler(gestore_errori)
     app.job_queue.run_daily(job_backup, time=ORARIO_BACKUP, name="backup_giornaliero")
