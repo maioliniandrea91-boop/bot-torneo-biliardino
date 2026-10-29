@@ -34,6 +34,7 @@ COMANDI
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import hmac
@@ -70,6 +71,8 @@ BONUS_MEDAGLIE = (20, 10, 5)
 BONUS_FINO_AL = 2026
 PROVE_STIMA = 8                          # tornei simulati per la stima durata
 CHIAVE_TV = "app_tv_token"
+# "Da chiamare a voce" in privato all'admin: si cancella da solo dopo questi minuti
+CANCELLA_DA_CHIAMARE_MIN = 15
 # Modalità prova: torneo finto con id negativo (mai presente nella tabella
 # tornei: statistiche, medagliere, Elo, storico e iscrizioni non lo vedono).
 ID_PROVA = -1
@@ -797,9 +800,10 @@ async def h_azione(req):
                 f"• {c} contro {avv} — biliardino {b}" for c, avv, b in mancate)
             for a in _admin_ids:
                 try:
-                    await bot.send_message(chat_id=a, text=testo)
+                    msg = await bot.send_message(chat_id=a, text=testo)
                 except Exception:
-                    pass
+                    continue
+                _cancella_dopo(req.app.get("jq"), bot, a, msg.message_id, CANCELLA_DA_CHIAMARE_MIN * 60)
         if d.get("azione") in ("prepara", "crea_gironi"):   # B: riepilogo copertura
             testo = await riepilogo_avvisabili(bot, conn)
             for a in _admin_ids:
@@ -904,9 +908,27 @@ async def cmd_avvisabili(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _rispondi(update, context, await riepilogo_avvisabili(context.bot, _conn()))
 
 
-def crea_web_app(bot=None) -> web.Application:
+def _cancella_dopo(jq, bot, chat_id: int, message_id: int, secondi: int) -> None:
+    """Cancella un messaggio del bot dopo 'secondi'. Con la job queue del bot
+    se c'è; altrimenti un task asyncio. Se il bot si riavvia nel frattempo il
+    messaggio resta (pazienza: è solo un promemoria)."""
+    if jq is not None:
+        jq.run_once(_elimina, secondi, data=(chat_id, message_id))
+        return
+
+    async def _dopo():
+        await asyncio.sleep(secondi)
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+    asyncio.get_running_loop().create_task(_dopo())
+
+
+def crea_web_app(bot=None, jq=None) -> web.Application:
     app = web.Application()
     app["bot"] = bot
+    app["jq"] = jq
     app.router.add_get("/", lambda r: web.Response(text="ok"))
     app.router.add_get("/app", h_miniapp)
     app.router.add_get("/tv/{token}", h_tv)
@@ -918,7 +940,7 @@ def crea_web_app(bot=None) -> web.Application:
 
 
 async def avvia_server(application):
-    runner = web.AppRunner(crea_web_app(application.bot))
+    runner = web.AppRunner(crea_web_app(application.bot, application.job_queue))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORTA).start()
     application.bot_data["web_runner"] = runner
