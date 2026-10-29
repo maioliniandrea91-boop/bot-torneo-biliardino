@@ -26,6 +26,8 @@ COMANDI
            alla chat privata col bot)
 - /sonoio Nome  -> collega il proprio account al giocatore Nome
 - /scollega Nome -> (admin) toglie il collegamento di un giocatore
+- /provatorneo N -> (admin, in privato) torneo finto di N coppie per provare
+                    l'app, isolato dal torneo vero; /fineprova lo chiude
 - /avvisabili -> (admin) coppie raggiungibili in privato alle chiamate
 - /tv   -> (admin, in privato) link della pagina TV; "/tv nuovo" lo rigenera
 """
@@ -68,10 +70,21 @@ BONUS_MEDAGLIE = (20, 10, 5)
 BONUS_FINO_AL = 2026
 PROVE_STIMA = 8                          # tornei simulati per la stima durata
 CHIAVE_TV = "app_tv_token"
+# Modalità prova: torneo finto con id negativo (mai presente nella tabella
+# tornei: statistiche, medagliere, Elo, storico e iscrizioni non lo vedono).
+ID_PROVA = -1
+CHIAVE_PROVA = "app_prova"            # valore = uid admin che l'ha avviata
+CHIAVE_PROVA_DAL = "app_prova_dal"    # ISO: scade da sola dopo DURATA_PROVA
+DURATA_PROVA_ORE = 12
+NOMI_PROVA = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+              "India", "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
+              "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Xray",
+              "Yankee", "Zulu", "Ares", "Bora", "Cielo", "Duna", "Etna", "Faro", "Gelo",
+              "Iris", "Luna", "Neve"]
 
 AZIONI_ADMIN = {"prepara", "anteprima_gironi", "crea_gironi", "imposta", "formato",
                 "avvia", "ferma", "chiama", "risultato", "ritira", "crea_tabellone",
-                "ricomincia", "sospendi", "riattiva", "assente"}
+                "ricomincia", "sospendi", "riattiva", "assente", "simula"}
 AZIONI_COPPIA = {"proponi", "conferma", "contesta"}
 
 _db_connect = None
@@ -118,10 +131,49 @@ def torneo_attivo(conn):
     ).fetchone()
 
 
+def prova_attiva(conn) -> int | None:
+    """uid dell'admin se la modalità prova è attiva (e non scaduta)."""
+    row = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_PROVA,)).fetchone()
+    if not row:
+        return None
+    dal = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (CHIAVE_PROVA_DAL,)).fetchone()
+    if dal and (datetime.now() - datetime.fromisoformat(dal[0])).total_seconds() > DURATA_PROVA_ORE * 3600:
+        chiudi_prova(conn)
+        return None
+    return int(row[0])
+
+
+def avvia_prova(conn, uid: int, n: int) -> None:
+    conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (ID_PROVA,))
+    for k, v in ((CHIAVE_PROVA, str(uid)), (CHIAVE_PROVA_DAL, datetime.now().isoformat())):
+        conn.execute("INSERT INTO stato (chiave, valore) VALUES (?, ?) "
+                     "ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore", (k, v))
+    nomi = NOMI_PROVA[:]
+    random.shuffle(nomi)
+    coppie = [f"{nomi[2 * i]}-{nomi[2 * i + 1]}" for i in range(n)]
+    t = M.nuovo_torneo(coppie)
+    # l'admin è membro della prima coppia: così vede anche la vista giocatore
+    s = {"torneo_id": ID_PROVA, "t": t, "proposte": {}, "utenti": {coppie[0]: uid}, "versione": 0}
+    salva(conn, s)
+
+
+def chiudi_prova(conn) -> bool:
+    n = conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (ID_PROVA,)).rowcount
+    n += conn.execute("DELETE FROM stato WHERE chiave IN (?, ?)", (CHIAVE_PROVA, CHIAVE_PROVA_DAL)).rowcount
+    conn.commit()
+    return bool(n)
+
+
 def carica(conn) -> dict:
-    """Stato dell'app per il torneo attivo. 't' è None se non preparato."""
-    tid, nome = torneo_attivo(conn) or (None, None)
-    s = {"torneo_id": tid, "nome": nome, "t": None, "proposte": {}, "utenti": {}, "versione": 0}
+    """Stato dell'app per il torneo attivo (o per la prova, se attiva).
+    't' è None se non preparato."""
+    prova = prova_attiva(conn)
+    if prova is not None:
+        tid, nome = ID_PROVA, "🧪 PROVA"
+    else:
+        tid, nome = torneo_attivo(conn) or (None, None)
+    s = {"torneo_id": tid, "nome": nome, "t": None, "proposte": {}, "utenti": {}, "versione": 0,
+         "prova": prova}
     if tid is None:
         return s
     row = conn.execute(
@@ -160,6 +212,8 @@ def mappa_utenti(conn, s: dict) -> dict[str, set[int]]:
     account collegati ai due giocatori con /sonoio. Un admin che ha iscritto
     coppie altrui non ne diventa 'membro' (gestisce già tutto da admin e non
     deve ricevere gli avvisi di ogni chiamata)."""
+    if s.get("prova") is not None:   # niente account veri: solo l'admin nella sua coppia
+        return {c: ({s["utenti"][c]} if c in s["utenti"] else set()) for c in s["t"]["coppie"]}
     collegati = dict(conn.execute("SELECT giocatore_id, user_id FROM giocatori_telegram").fetchall())
     coppie = s["t"]["coppie"] if s["t"] else [n for n, _ in squadre_iscritte(conn, s["torneo_id"])]
     mappa = {}
@@ -187,9 +241,12 @@ def _versione_globale(conn, s: dict) -> str:
 
 # ======================= TESTE DI SERIE E STIMA =======================
 
-def forza_coppie(conn, coppie: list[str]) -> dict[str, float]:
+def forza_coppie(conn, coppie: list[str], prova: bool = False) -> dict[str, float]:
     """Media dei due giocatori: Elo sfidine anno in corso (1000 se assente)
     + bonus medaglie dell'anno in corso."""
+    if prova:
+        rng = random.Random(",".join(coppie))
+        return {c: round(rng.gauss(1000, 80)) for c in coppie}
     anno = date.today().year
     elo = {r["nome"].lower(): r["elo"] for r in statistiche.calcola_classifica(conn, anno)}
     med = statistiche.calcola_medagliere(conn, anno)[0] if anno <= BONUS_FINO_AL else []
@@ -270,7 +327,7 @@ def etichetta(p: dict, t: dict) -> str:
 def vista(s: dict, uid: int | None = None) -> dict:
     t = s["t"]
     out = {"torneo": s["nome"], "torneo_id": s["torneo_id"], "versione": s["versione"],
-           "fase": t["fase"] if t else "nessuna", "url_tv": None}
+           "fase": t["fase"] if t else "nessuna", "url_tv": None, "prova": s.get("prova") is not None}
     if uid is not None:
         out["ruolo"] = {"admin": bool(_is_admin(uid)),
                         "coppie": sorted(c for c, u in s.get("accessi", {}).items() if uid in u)}
@@ -351,7 +408,12 @@ def esegui(conn, uid: int, d: dict) -> dict:
     s = carica(conn)
     if s["torneo_id"] is None:
         raise ValueError("Nessun torneo attivo")
-    s["accessi"] = mappa_utenti(conn, s)
+    prova = s.get("prova") is not None
+    if az == "simula" and not prova:
+        raise ValueError("Simulazione disponibile solo in modalità prova")
+    if az == "prepara" and prova:
+        raise ValueError("In prova le coppie sono già caricate")
+    s["accessi"] = mappa_utenti(conn, s) if s["t"] is not None or not prova else {}
     if az == "prepara":
         return _prepara(conn, s)
     if s["t"] is None:
@@ -364,6 +426,10 @@ def esegui(conn, uid: int, d: dict) -> dict:
     if az == "ricomincia":
         if d.get("conferma") != "RICOMINCIA":
             raise ValueError("Conferma mancante")
+        if prova:   # stesse coppie finte, si riparte da zero
+            s["t"], s["proposte"] = M.nuovo_torneo(t["coppie"]), {}
+            salva(conn, s)
+            return risposta
         conn.execute("DELETE FROM app_tornei WHERE torneo_id = ?", (s["torneo_id"],))
         if t["fase"] != "iscrizioni":   # i gironi le avevano chiuse: si riaprono
             conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '1') "
@@ -377,7 +443,7 @@ def esegui(conn, uid: int, d: dict) -> dict:
         n, metodo = int(d.get("n_gironi", 0)), d.get("metodo", "teste")
         if d.get("rimescola"):
             t["seme"] = random.randrange(10**9)
-        forza = forza_coppie(conn, t["coppie"])
+        forza = forza_coppie(conn, t["coppie"], s.get("prova") is not None)
         manuale = d.get("manuale")
         M.crea_gironi(t, n, metodo, forza, manuale)
         if az == "anteprima_gironi":
@@ -388,8 +454,12 @@ def esegui(conn, uid: int, d: dict) -> dict:
                 s["t"]["seme"] = t["seme"]
                 salva(conn, s)
             return risposta
-        conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '0') "
-                     "ON CONFLICT(chiave) DO UPDATE SET valore = '0'")
+        if not prova:   # chiude le iscrizioni del torneo vero
+            conn.execute("INSERT INTO stato (chiave, valore) VALUES ('aperte', '0') "
+                         "ON CONFLICT(chiave) DO UPDATE SET valore = '0'")
+
+    elif az == "simula":
+        _simula_prova(t, proposte, s)
 
     elif az == "imposta":
         valori = {k: int(v) for k, v in (d.get("valori") or {}).items()}
@@ -511,6 +581,46 @@ def esegui(conn, uid: int, d: dict) -> dict:
     s["t"], s["proposte"] = t, proposte
     salva(conn, s)
     return risposta
+
+
+def _simula_prova(t: dict, proposte: dict, s: dict) -> None:
+    """Solo prova: chiama le partite e mette punteggi casuali a quelle in campo.
+    La partita della coppia dell'admin riceve una proposta dell'avversario (da
+    confermare dalla vista giocatore); una su tre delle altre resta proposta
+    (da confermare come admin); le altre sono registrate."""
+    if t["fase"] not in ("gironi", "ko"):
+        raise ValueError("Crea prima i gironi (o il tabellone)")
+    M.chiama_partite(t)
+    in_campo = sorted((p for p in t["partite"].values() if p["stato"] == "in_corso"),
+                      key=lambda p: p["ordine"])
+    if not in_campo:
+        raise ValueError("Nessuna partita da giocare: crea il tabellone se i gironi sono finiti")
+    mie = set(s["utenti"])
+    rng = random.Random()
+    for i, p in enumerate(in_campo):
+        if p["id"] in proposte:
+            continue
+        a_giochi = []
+        regole = p["regole"] or {"gol": t["config"]["gol"], "al_meglio_di": M._al_meglio_di(t, p),
+                                 "vantaggio_a": 0}
+        gol, bo, vant = regole["gol"], regole["al_meglio_di"], regole.get("vantaggio_a", 0)
+        va = vb = 0
+        while max(va, vb) < bo // 2 + 1:
+            if rng.random() < .5:
+                a_giochi.append((gol, rng.randint(0, gol - 1))); va += 1
+            else:
+                a_giochi.append((rng.randint(vant, gol - 1), gol)); vb += 1
+        if {p["a"], p["b"]} & mie:
+            da = p["b"] if p["a"] in mie else p["a"]
+        elif i % 3 == 0:
+            da = p["a"]
+        else:
+            M.registra(t, p["id"], a_giochi)
+            continue
+        prova_t = copy.deepcopy(t)
+        M.registra(prova_t, p["id"], a_giochi)        # solo validazione
+        proposte[p["id"]] = {"giochi": [list(g) for g in a_giochi], "da": da,
+                             "contestata": False, "quando": datetime.now().isoformat()}
 
 
 def _prepara(conn, s: dict) -> dict:
@@ -728,11 +838,49 @@ async def riepilogo_avvisabili(bot, conn) -> str:
         ko.append(f"• {c}: nessun account → serve /sonoio " + " o /sonoio ".join(senza))
     tot = len(accessi)
     testo = f"📲 Avvisi in privato — {s['nome']}: {len(ok)}/{tot} coppie avvisabili."
+    if s.get("prova") is not None:
+        testo += "\n(Prova: le coppie finte non hanno account, è normale che risultino non avvisabili.)"
     if ko:
         testo += "\n\nNon avvisabili (da chiamare a voce):\n" + "\n".join(ko)
     else:
         testo += "\nTutte raggiungibili ✅"
     return testo
+
+
+async def cmd_provatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/provatorneo [N]: torneo finto per provare l'app (solo admin, in privato)."""
+    uid = update.effective_user.id
+    if not _is_admin(uid):
+        await _rispondi(update, context, "Comando riservato agli admin.")
+        return
+    if update.effective_chat.type != "private":
+        await _rispondi(update, context, "Usalo in chat privata con il bot.")
+        return
+    arg = (context.args or ["12"])[0]
+    if not arg.isdigit() or not 4 <= int(arg) <= 18:
+        await update.message.reply_text("Uso: /provatorneo N (coppie finte, da 4 a 18; predefinito 12)")
+        return
+    conn = _conn()
+    avvia_prova(conn, uid, int(arg))
+    mia = next(iter(carica(conn)["utenti"]))
+    await update.message.reply_text(
+        f"🧪 Prova avviata: {arg} coppie finte. Tu giochi in «{mia}».\n\n"
+        "• L'app e la pagina TV mostrano la PROVA al posto del torneo vero, per tutti.\n"
+        "• Il torneo vero non viene toccato: iscrizioni, lista, statistiche, Elo e medagliere restano come sono.\n"
+        "• Gli avvisi arrivano solo a te.\n"
+        "• In Gestione trovi «🎲 Simula giro» (punteggi casuali) e «👤 Vista giocatore».\n"
+        f"• Chiudi con /fineprova (si chiude da sola dopo {DURATA_PROVA_ORE} ore).",
+        reply_markup=_bottone_app(),
+    )
+
+
+async def cmd_fineprova(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id):
+        await _rispondi(update, context, "Comando riservato agli admin.")
+        return
+    chiusa = chiudi_prova(_conn())
+    await _rispondi(update, context, "🧪 Prova chiusa: l'app torna sul torneo vero." if chiusa
+                    else "Nessuna prova attiva.")
 
 
 async def cmd_avvisabili(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -891,6 +1039,8 @@ COMANDI_APP = [
     ("app", "Apre l'app torneo: gironi, partite, risultati"),
     ("sonoio", "Collega il tuo account al tuo nome giocatore — es. /sonoio Luca"),
     ("scollega", "[admin] Toglie il collegamento /sonoio di un giocatore — /scollega Luca"),
+    ("provatorneo", "[admin] Torneo finto per provare l'app — /provatorneo 12 (chiudi con /fineprova)"),
+    ("fineprova", "[admin] Chiude la prova: l'app torna sul torneo vero"),
     ("avvisabili", "[admin] Quali coppie ricevono le chiamate in privato e chi deve fare /sonoio"),
     ("tv", "[admin] Link della pagina TV del tabellone (/tv nuovo lo cambia)"),
 ]
@@ -905,3 +1055,5 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando, token, admin
     app.add_handler(CommandHandler("sonoio", cmd_sonoio))
     app.add_handler(CommandHandler("scollega", cmd_scollega))
     app.add_handler(CommandHandler("avvisabili", cmd_avvisabili))
+    app.add_handler(CommandHandler("provatorneo", cmd_provatorneo))
+    app.add_handler(CommandHandler("fineprova", cmd_fineprova))
