@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from datetime import datetime, timedelta
 
 os.environ.setdefault("BOT_TOKEN", "123:prova")
 import app_tornei as A  # noqa: E402
@@ -111,6 +112,12 @@ async def test_backup():
     c.execute("INSERT INTO tornei VALUES (1)")
     c.commit()
     assert await S.esegui_backup(bot) == "inviato"
+    assert await S.esegui_backup(bot) == "invariato"
+    # niente modifiche da una settimana: parte lo stesso il backup settimanale
+    vecchio = (datetime.now(S.ROMA) - timedelta(days=7)).isoformat()
+    S._scrivi(conn(), S.CHIAVE_ULTIMO, vecchio)
+    assert await S.esegui_backup(bot) == "inviato"
+    assert await S.esegui_backup(bot) == "invariato"
     print("backup ok")
 
 

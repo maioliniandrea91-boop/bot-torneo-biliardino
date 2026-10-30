@@ -3,7 +3,8 @@
 - Errori: ogni eccezione non gestita (bot, job, server dell'app) arriva in privato
   agli admin, al massimo una volta ogni 10 minuti per lo stesso errore.
 - Backup: ogni giorno alle ORARIO_BACKUP il bot invia il file del database nel
-  canale privato collegato, solo se qualcosa è cambiato dall'ultimo backup.
+  canale privato collegato, se qualcosa è cambiato dall'ultimo backup
+  e comunque almeno uno a settimana (canale con cancellazione automatica a 1 mese).
   /backup -> backup subito (o istruzioni per collegare il canale)
   /backup canale -> collega un altro canale
 - Ripristino: inoltra al bot (in privato) un file di backup .db dal canale →
@@ -17,7 +18,7 @@ import sqlite3
 import tempfile
 import time as _time
 import traceback
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -29,6 +30,10 @@ ROMA = ZoneInfo("Europe/Rome")
 ORARIO_BACKUP = time(hour=6, minute=0, tzinfo=ROMA)   # dopo la fine dei tornei (sab 05)
 CHIAVE_CANALE = "backup_canale"
 CHIAVE_HASH = "backup_hash"
+CHIAVE_ULTIMO = "backup_ultimo"   # data dell'ultimo backup inviato
+# Anche senza modifiche, un backup almeno ogni settimana: col canale a
+# cancellazione automatica di 1 mese ne restano sempre almeno 4.
+SETTIMANALE = timedelta(days=6, hours=12)
 SILENZIO_ERRORE_S = 600
 
 _db_connect = None
@@ -88,7 +93,7 @@ def _impronta(conn) -> str:
     """Impronta del contenuto (esclusa la riga con l'impronta stessa)."""
     h = hashlib.sha256()
     for riga in conn.iterdump():
-        if f"'{CHIAVE_HASH}'" not in riga:
+        if f"'{CHIAVE_HASH}'" not in riga and f"'{CHIAVE_ULTIMO}'" not in riga:
             h.update(riga.encode())
     return h.hexdigest()
 
@@ -99,9 +104,13 @@ async def esegui_backup(bot, forzato: bool = False, nota: str = "") -> str:
     if not canale:
         return "nessun canale"
     impronta = _impronta(conn)
-    if not forzato and impronta == _leggi(conn, CHIAVE_HASH):
-        return "invariato"
     adesso = datetime.now(ROMA)
+    invariato = impronta == _leggi(conn, CHIAVE_HASH)
+    if not forzato and invariato:
+        ultimo = _leggi(conn, CHIAVE_ULTIMO)
+        if ultimo and adesso - datetime.fromisoformat(ultimo) < SETTIMANALE:
+            return "invariato"
+        nota = nota or "🗓 backup settimanale (nessuna modifica)"
     percorso = os.path.join(tempfile.mkdtemp(), f"biliardino_{adesso:%Y-%m-%d_%H%M}.db")
     dest = sqlite3.connect(percorso)
     with dest:
@@ -114,6 +123,7 @@ async def esegui_backup(bot, forzato: bool = False, nota: str = "") -> str:
                                         f"{os.path.getsize(percorso) // 1024} KB" + (f"\n{nota}" if nota else ""))
     os.remove(percorso)
     _scrivi(conn, CHIAVE_HASH, impronta)
+    _scrivi(conn, CHIAVE_ULTIMO, adesso.isoformat())
     return "inviato"
 
 
@@ -160,7 +170,7 @@ async def ricevi_inoltro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     esito = await esegui_backup(context.bot, forzato=True)
     await update.message.reply_text(
         f"✅ Canale «{chat.title}» collegato. Primo backup {esito}. "
-        f"Da ora un backup al giorno alle {ORARIO_BACKUP:%H:%M}, solo se qualcosa è cambiato.")
+        f"Da ora un backup al giorno alle {ORARIO_BACKUP:%H:%M}, se qualcosa è cambiato, e comunque almeno uno a settimana.")
     raise ApplicationHandlerStop
 
 
