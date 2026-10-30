@@ -55,6 +55,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 import sqlite3
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -326,11 +327,28 @@ async def ripubblica_lista_gruppo(bot, conn, chat_id: int):
 SEPARATORI_COPPIA = re.compile(r"\s+(?:e|ed)\s+|\s*[-/&+,]\s*", re.IGNORECASE)
 
 
+def togli_simboli(testo: str) -> str:
+    """Sostituisce con uno spazio emoji, simboli e caratteri invisibili
+    (giunzioni, selettori di variante, toni della pelle). Restano lettere,
+    numeri, spazi, apostrofi, punti e i separatori di coppia."""
+    out = []
+    for ch in testo:
+        cat = unicodedata.category(ch)
+        if cat[0] in "LN" or ch in " '’.-/&+,":
+            out.append(ch)
+        elif cat[0] == "M" and out and out[-1] != " " and ch not in "\ufe0e\ufe0f":
+            out.append(ch)  # accenti combinati attaccati a una lettera
+        else:
+            out.append(" ")
+    return "".join(out)
+
+
 def normalizza_nome_squadra(testo: str) -> str:
     """Le squadre sono sempre coppie: porta tutto al formato 'Nome1-Nome2'.
     'antonio e eva', 'Antonio/Eva', 'Antonio Eva' -> 'Antonio-Eva'.
+    Emoji e simboli valgono come spazio: 'Gianni🔥Pinna' -> 'Gianni-Pinna'.
     Se non si riesce a riconoscere con certezza due nomi, lascia com'è."""
-    pulito = " ".join(testo.split())
+    pulito = " ".join(togli_simboli(testo).split())
     parti = [p for p in SEPARATORI_COPPIA.split(pulito) if p]
     if len(parti) != 2:
         parole = pulito.split(" ")
@@ -359,6 +377,9 @@ async def iscrivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome_scritto = " ".join(context.args).strip()
     nome_squadra = normalizza_nome_squadra(nome_scritto)
+    if not nome_squadra:
+        await rispondi(update, context, "Uso corretto: /iscrivi Nome1-Nome2")
+        return
 
     # Il limite di 1 squadra per persona vale solo per gli utenti normali,
     # e solo all'interno del torneo attivo corrente.
@@ -506,7 +527,10 @@ async def rinomina(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Es. /rinomina 3 | Antonio-Eva"
         )
         return
-    vecchio, nuovo = parti
+    vecchio, nuovo = parti[0], normalizza_nome_squadra(parti[1])
+    if not nuovo:
+        await rispondi(update, context, "Il nuovo nome è vuoto.")
+        return
 
     conn = db_connect()
     torneo_id, nome_torneo = get_torneo_attivo(conn)
@@ -536,6 +560,10 @@ async def rinomina(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.execute("UPDATE squadre SET nome_squadra = ? WHERE id = ?", (nuovo, squadra_id))
     conn.commit()
+    try:
+        statistiche.registra_coppia(conn, nuovo)  # anagrafica giocatori
+    except Exception:
+        pass
     await pubblica_lista(update, context, conn, torneo_id, nome_torneo,
                          f"✏️ {nome_reale} → {nuovo}")
 

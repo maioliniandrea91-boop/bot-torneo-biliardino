@@ -141,6 +141,25 @@ def test_ripristino():
     print("ripristino ok")
 
 
+def test_nomi_squadra():
+    import bot_iscrizioni_torneo as B
+    casi = {
+        "Gianni🔥Pinna": "Gianni-Pinna",
+        "gianni 🔥 pinna": "Gianni-Pinna",
+        "Marco❤️Lirio": "Marco-Lirio",
+        "👍🏻Eugenio e Flavia": "Eugenio-Flavia",
+        "Maio-Socio": "Maio-Socio",
+        "antonio e eva": "Antonio-Eva",
+        "Niccolò/Zoë": "Niccolò-Zoë",
+        "D'Angelo Rossi": "D'Angelo-Rossi",
+        "🔥": "",
+    }
+    for dato, atteso in casi.items():
+        got = B.normalizza_nome_squadra(dato)
+        assert got == atteso, f"{dato!r}: {got!r} invece di {atteso!r}"
+    print("nomi squadra ok")
+
+
 if __name__ == "__main__":
     c = avvia()
     test_completa_gironi_e_pdf(c)
@@ -149,4 +168,5 @@ if __name__ == "__main__":
     asyncio.run(test_cancellazioni(c))
     asyncio.run(test_backup())
     test_ripristino()
+    test_nomi_squadra()
     print("tutti i test superati")
