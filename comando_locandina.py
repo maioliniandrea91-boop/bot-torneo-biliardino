@@ -24,6 +24,9 @@ il prossimo giro cadrebbe dopo l'inizio del torneo.
 
 Altri comandi:
   /programmate            -> locandine in attesa e ripubblicazioni attive
+  /ripubblica [N] [48h]   -> rimette subito la locandina (ultima pubblicata o n° N)
+                             con "Iscritte X/18" e la lista sotto, togliendo il
+                             post precedente; con 48h attiva il giro ogni 48 ore
   /annullalocandina N     -> annulla la pubblicazione programmata n° N
                              o ferma le sue ripubblicazioni
   /didascalia testo       -> cambia il testo aggiunto sotto la didascalia
@@ -424,6 +427,33 @@ def _riga_posti(iscritte: int, conn=None) -> str:
     return riga
 
 
+async def _cancella_post_vecchi(bot, conn, gruppo: int, tranne_msg: int, vecchio: int | None = None):
+    """Toglie dal gruppo i post delle locandine precedenti (anche se sotto ci sono
+    già iscrizioni o altri messaggi). Telegram fa cancellare al bot solo i suoi
+    messaggi con meno di 48 ore: quelli più vecchi restano e vanno tolti a mano."""
+    for lid_v, msg in conn.execute(
+        "SELECT id, msg_gruppo FROM locandine WHERE msg_gruppo IS NOT NULL AND msg_gruppo != ?",
+        (tranne_msg,),
+    ).fetchall():
+        try:
+            await bot.delete_message(chat_id=gruppo, message_id=msg)
+        except Exception:
+            pass  # già cancellato a mano o più vecchio di 48h
+        conn.execute("UPDATE locandine SET msg_gruppo = NULL WHERE id = ?", (lid_v,))
+    conn.commit()
+    if vecchio and vecchio != tranne_msg:  # post precedente della stessa locandina
+        try:
+            await bot.delete_message(chat_id=gruppo, message_id=vecchio)
+        except Exception:
+            pass
+
+
+async def _iscritte(conn, torneo_ref) -> int:
+    if torneo_ref is None:
+        return 0
+    return conn.execute("SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_ref,)).fetchone()[0]
+
+
 async def _avvisa_admin(bot, testo: str):
     for admin in _admin_ids:
         try:
@@ -479,13 +509,9 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
         _programma_repost(conn, jq, lid, adesso + timedelta(hours=1))
         await _avvisa_admin(bot, f"⚠️ Ripubblicazione n° {lid} non riuscita ({e}). Riprovo tra un'ora.")
         return
-    if msg_vecchio:
-        try:
-            await bot.delete_message(chat_id=gruppo, message_id=msg_vecchio)
-        except Exception:
-            pass  # già cancellato a mano o troppo vecchio: pazienza
     conn.execute("UPDATE locandine SET msg_gruppo = ? WHERE id = ?", (nuovo.message_id, lid))
     conn.commit()
+    await _cancella_post_vecchi(bot, conn, gruppo, nuovo.message_id, msg_vecchio)
     if _ripubblica_lista:  # lista squadre subito sotto la locandina, la vecchia sparisce
         try:
             await _ripubblica_lista(bot, conn, gruppo)
@@ -515,17 +541,26 @@ async def _pubblica(bot, lid: int, job_queue=None) -> str:
         return "Nessun gruppo registrato: manda /registragruppo dentro il gruppo del circolo."
     # prima il cambio torneo, così chi vede la locandina si iscrive già a quello nuovo
     esito_torneo = _cambia_torneo(conn, lid)
+    att = _torneo_attivo(conn)
+    iscritte = await _iscritte(conn, att[0] if att else None)
+    if iscritte:  # locandina a iscrizioni già aperte: mostra subito i posti
+        didascalia = f"{didascalia}\n\n{_riga_posti(iscritte, conn)}"
     try:
         msg = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
     except Exception as e:
         return (f"❌ Locandina n° {lid} NON pubblicata: errore Telegram ({e})."
                 + (f"\n{esito_torneo}" if esito_torneo else ""))
-    att = _torneo_attivo(conn)
     conn.execute(
         "UPDATE locandine SET stato = 'pubblicata', msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
         (msg.message_id, att[0] if att else None, lid),
     )
     conn.commit()
+    await _cancella_post_vecchi(bot, conn, gruppo, msg.message_id)
+    if iscritte and _ripubblica_lista:
+        try:
+            await _ripubblica_lista(bot, conn, gruppo)
+        except Exception:
+            pass
     esito = f"✅ Locandina n° {lid} pubblicata nel gruppo." + (f"\n{esito_torneo}" if esito_torneo else "")
     ripeti = conn.execute("SELECT ripeti FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
     if ripeti and job_queue is not None:
@@ -769,6 +804,81 @@ async def annullalocandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Nessuna locandina programmata o in ripubblicazione con n° {lid}.")
 
 
+async def ripubblica(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ripubblica [N] [48h] — rimette subito nel gruppo una locandina già uscita,
+    con 'Iscritte X/18' e la lista squadre sotto; toglie il post precedente.
+    Senza N prende l'ultima pubblicata. Con 48h attiva (o riparte da ora) il giro
+    di ripubblicazione ogni ~48 ore fino all'inizio del torneo."""
+    if not _is_admin(update.effective_user.id):
+        await update.message.reply_text("Comando riservato agli admin.")
+        return
+    if update.effective_chat.type != "private":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+    args = [a.lower() for a in (context.args or [])]
+    con_48h = "48h" in args or "48" in args
+    numeri = [a for a in args if a.isdigit() and a != "48"]
+    conn = _conn()
+    if numeri:
+        row = conn.execute(
+            "SELECT id FROM locandine WHERE id = ? AND stato = 'pubblicata'", (int(numeri[0]),)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id FROM locandine WHERE stato = 'pubblicata' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    risposta = (update.message.reply_text if update.effective_chat.type == "private"
+                else (lambda t: _avvisa_admin(context.bot, t)))
+    if not row:
+        await risposta("Nessuna locandina pubblicata da ripubblicare."
+                       + (f" (n° {numeri[0]} non trovata o non pubblicata)" if numeri else ""))
+        return
+    lid = row[0]
+    file_id, didascalia, extra, torneo_ref, msg_vecchio = conn.execute(
+        "SELECT file_id, didascalia, extra, torneo_ref, msg_gruppo FROM locandine WHERE id = ?", (lid,)
+    ).fetchone()
+    gruppo = _gruppo(conn)
+    if gruppo is None:
+        await risposta("Nessun gruppo registrato: manda /registragruppo dentro il gruppo del circolo.")
+        return
+    att = _torneo_attivo(conn)
+    if torneo_ref is None and att:
+        torneo_ref = att[0]
+    avviso = ""
+    if not att or att[0] != torneo_ref:
+        avviso = "\n⚠️ Questa locandina non è del torneo attivo: la ripubblico senza riga iscritte."
+    iscritte = await _iscritte(conn, torneo_ref) if not avviso else 0
+    testo = _testo_completo(didascalia, extra)
+    if not avviso:
+        testo += f"\n\n{_riga_posti(iscritte, conn)}"
+    try:
+        nuovo = await context.bot.send_photo(chat_id=gruppo, photo=file_id, caption=testo)
+    except Exception as e:
+        await risposta(f"❌ Locandina n° {lid} NON ripubblicata: errore Telegram ({e}).")
+        return
+    conn.execute("UPDATE locandine SET msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
+                 (nuovo.message_id, torneo_ref, lid))
+    conn.commit()
+    await _cancella_post_vecchi(context.bot, conn, gruppo, nuovo.message_id, msg_vecchio)
+    if not avviso and _ripubblica_lista:
+        try:
+            await _ripubblica_lista(context.bot, conn, gruppo)
+        except Exception:
+            pass
+    esito = f"✅ Locandina n° {lid} ripubblicata nel gruppo (post precedente tolto)." + avviso
+    ripeti = conn.execute("SELECT ripeti FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
+    if con_48h or ripeti:  # il giro riparte da adesso, così resta nella finestra delle 48h
+        conn.execute("UPDATE locandine SET ripeti = 1 WHERE id = ?", (lid,))
+        conn.commit()
+        _avvia_repost(conn, context.job_queue, lid)
+        prossimo = conn.execute("SELECT prossimo_repost FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
+        esito += (f"\n🔁 Prossima ripubblicazione: {datetime.fromisoformat(prossimo).strftime('%d/%m %H:%M')}."
+                  if prossimo else "\n🔁 Nessuna ripubblicazione: il torneo arriva prima di 48 ore.")
+    await risposta(esito)
+
+
 async def _modifica_pubblicata(bot, lid: int, testo: str) -> str:
     """Aggiorna il testo aggiunto di una locandina già pubblicata e modifica
     la didascalia del post nel gruppo. Le ripubblicazioni useranno il nuovo testo."""
@@ -882,6 +992,7 @@ def registra(app, db_connect, is_admin, chiave_gruppo, admin_ids, max_squadre=18
     _max_squadre = max_squadre
     app.add_handler(CommandHandler("locandina", locandina))
     app.add_handler(CommandHandler("programmate", programmate))
+    app.add_handler(CommandHandler("ripubblica", ripubblica))
     app.add_handler(CommandHandler("annullalocandina", annullalocandina))
     app.add_handler(CommandHandler("didascalia", didascalia))
     app.add_handler(CallbackQueryHandler(bottoni, pattern=r"^loc:"))
@@ -894,6 +1005,7 @@ def registra(app, db_connect, is_admin, chiave_gruppo, admin_ids, max_squadre=18
 COMANDI_LOCANDINA = [
     ("locandina", "[admin] Crea la locandina — /locandina 16/10 volo [22:00] [25€] [premi COPPE]"),
     ("programmate", "[admin] Elenco locandine programmate"),
+    ("ripubblica", "[admin] Ripubblica subito la locandina con iscritte e lista — /ripubblica [N] [48h]"),
     ("didascalia", "[admin] Cambia il testo sotto l'ultima locandina pubblicata — /didascalia testo"),
     ("annullalocandina", "[admin] Annulla una locandina programmata o ferma le ripubblicazioni — /annullalocandina N"),
 ]
