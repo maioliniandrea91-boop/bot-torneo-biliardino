@@ -154,6 +154,15 @@ async def main():
     s = await stato(q="?med=sempre")
     assert s["medagliere"]["anno"] is None and s["medagliere"]["righe"] == []
 
+    # ---- classifica del lunedì: nel gruppo, con bottone, la vecchia sparisce
+    vecchia = bot.n
+    ST._db_connect = db_connect   # nel bot lo imposta statistiche.registra
+    ctx = type("C", (), {"bot": bot})()
+    await ST.classifica_settimanale(ctx)
+    assert bot.inviati[-1][1] == GRUPPO and "Classifica del lunedì" in bot.inviati[-1][2]
+    assert bot.tasti[-1].inline_keyboard[0][0].text == "📱 Segna una sfida"
+    assert (GRUPPO, vecchia) in bot.cancellati
+
     # ---- comando /toglisoprannome: logica di base
     c = db_connect()
     assert ST.aggiungi_soprannome(c, "Luca", gid)   # già in anagrafica: errore

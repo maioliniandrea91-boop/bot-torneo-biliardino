@@ -38,6 +38,7 @@ from __future__ import annotations
 import difflib
 import re
 from datetime import date, datetime
+from datetime import time as dtime
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -758,6 +759,23 @@ COMANDI_STATISTICHE = [
 ]
 
 
+ORARIO_CLASSIFICA_SETTIMANALE = dtime(hour=21, minute=0, tzinfo=FUSO)   # lunedì, dopo il gioco libero
+
+
+async def classifica_settimanale(context):
+    """Ogni lunedì alle 21 ripubblica la classifica nel gruppo (la vecchia sparisce),
+    così il bottone «📱 Segna una sfida» è sempre in fondo alla chat.
+    Se nell'anno non c'è ancora nessuna sfida non pubblica nulla."""
+    from database import chat_gruppo_registrato
+    conn = _conn()
+    gruppo = chat_gruppo_registrato(conn)
+    anno = _oggi().year
+    if gruppo is None or not calcola_classifica(conn, anno):
+        return
+    await _sostituisci(context.bot, conn, gruppo, "classifica_msg",
+                       "🗓️ Classifica del lunedì\n\n" + testo_classifica(conn, anno))
+
+
 def registra(app, db_connect, is_admin, rispondi, cancella_comando):
     global _db_connect, _is_admin, _rispondi, _cancella_comando
     _db_connect, _is_admin, _rispondi, _cancella_comando = db_connect, is_admin, rispondi, cancella_comando
@@ -769,3 +787,7 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando):
         ("escluditorneo", escluditorneo), ("includitorneo", includitorneo),
     ):
         app.add_handler(CommandHandler(nome, funz))
+    if app.job_queue is not None:
+        # PTB >= 20: 0 = domenica, 1 = lunedì (come il sondaggio del gioco libero)
+        app.job_queue.run_daily(classifica_settimanale, time=ORARIO_CLASSIFICA_SETTIMANALE,
+                                days=(1,), name="classifica_settimanale_lunedi")
