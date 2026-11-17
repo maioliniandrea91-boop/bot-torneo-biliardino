@@ -30,11 +30,13 @@ def init_data(uid):
 
 class BotFinto:
     def __init__(self):
-        self.inviati, self.cancellati, self.n = [], [], 100
+        self.inviati, self.cancellati, self.n, self.tasti = [], [], 100, []
+        self.username = "BotProva"
 
     async def send_message(self, chat_id, text, **k):
         self.n += 1
         self.inviati.append(("testo", chat_id, text))
+        self.tasti.append(k.get("reply_markup"))
         return type("M", (), {"message_id": self.n})()
 
     async def delete_message(self, chat_id, message_id):
@@ -75,6 +77,8 @@ async def main():
     r = await az(azione="salva", a=["luca", "Matteo"], b=["Paolo", "Michele"], va=5, vb=2)
     assert r["ok"] and "n° 1" in r["testo"], r
     assert bot.inviati[-1][1] == GRUPPO and "Registrata 1 sfida" in bot.inviati[-1][2] and "Dalla app" in bot.inviati[-1][2]
+    url = bot.tasti[-1].inline_keyboard[0][0].url   # bottone sotto la classifica nel gruppo
+    assert url == "https://t.me/BotProva/sfide?startapp=sfide", url
     prima = bot.n
     r = await az(azione="salva", a=["Luca", "Paolo"], b=["Matteo", "Michele"], va=3, vb=3)
     assert r["ok"] and (GRUPPO, prima) in bot.cancellati   # una sola classifica viva nel gruppo

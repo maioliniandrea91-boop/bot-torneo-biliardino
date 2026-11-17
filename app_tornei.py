@@ -1244,9 +1244,10 @@ async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _cancella_comando(update)
     nome = context.bot.username
     msg = await context.bot.send_message(
-        update.effective_chat.id, "🎱 App torneo: apri la chat col bot",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-            "Apri", url=f"https://t.me/{nome}?start=app")]]))
+        update.effective_chat.id, "🎱 App torneo: apri la chat col bot\n📱 Sfide: si aprono subito da qui",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Apri", url=f"https://t.me/{nome}?start=app")],
+            [InlineKeyboardButton("📱 Segna una sfida", url=f"https://t.me/{nome}/sfide?startapp=sfide")]]))
     context.job_queue.run_once(_elimina, 60, data=(update.effective_chat.id, msg.message_id))
 
 

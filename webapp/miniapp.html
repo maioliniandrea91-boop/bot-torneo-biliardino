@@ -178,6 +178,8 @@ const tg = window.Telegram && Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 const INIT = tg ? tg.initData : "";
 let S = null, tab = null, foglioAperto = false, bozza = {};
+// link diretto t.me/<bot>/sfide?startapp=sfide: si apre sulla scheda Sfide
+try { if ((window.Telegram?.WebApp?.initDataUnsafe?.start_param || "") === "sfide") tab = "sfide"; } catch(e) {}
 const FASI = {nessuna:"Da preparare", iscrizioni:"Pronto per i gironi", gironi:"Gironi in corso", ko:"Tabellone a eliminazione", finito:"Concluso"};
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));

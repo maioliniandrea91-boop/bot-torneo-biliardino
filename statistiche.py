@@ -41,7 +41,7 @@ from datetime import date, datetime
 from html import escape
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CommandHandler, ContextTypes
 
@@ -432,9 +432,28 @@ def testo_medagliere(conn, anno: int | None) -> str:
 
 # ======================= INVIO NEL GRUPPO =======================
 
+APP_SFIDE = "sfide"   # nome breve della Mini App su BotFather (/newapp): t.me/<bot>/sfide
+
+
+def bottone_sfide(bot):
+    """Bottone «Segna una sfida»: apre la Mini App sulla scheda Sfide con un tocco, anche dal gruppo."""
+    try:
+        nome = bot.username
+    except Exception:
+        nome = None
+    if not nome:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "📱 Segna una sfida", url=f"https://t.me/{nome}/{APP_SFIDE}?startapp=sfide")]])
+
+
 async def _sostituisci(bot, conn, chat_id: int, chiave: str, testo: str):
-    """Come la lista squadre: un solo messaggio vivo per tipo, il vecchio sparisce."""
-    nuovo = await bot.send_message(chat_id=chat_id, text=testo, parse_mode=ParseMode.HTML)
+    """Come la lista squadre: un solo messaggio vivo per tipo, il vecchio sparisce.
+    Sotto la classifica c'è sempre il bottone per segnare una sfida."""
+    extra = {}
+    if chiave == "classifica_msg" and (tasti := bottone_sfide(bot)):
+        extra["reply_markup"] = tasti
+    nuovo = await bot.send_message(chat_id=chat_id, text=testo, parse_mode=ParseMode.HTML, **extra)
     k = f"{chiave}_{chat_id}"
     row = conn.execute("SELECT valore FROM stato WHERE chiave = ?", (k,)).fetchone()
     if row:
