@@ -23,7 +23,8 @@ COSA FA:
                             nome e archivia automaticamente quello precedente
                             (squadre incluse, restano consultabili in /storico)
 - /storico [pagina]       -> elenco di tutti i tornei, 10 per pagina
-- /storico Nome           -> mostra le squadre e il podio di un torneo passato
+- /storico #N | Nome      -> mostra le squadre e il podio di un torneo passato
+                            (#N = numero del torneo nell'elenco, fisso nel tempo)
 - /podio Sq1 | Sq2 | Sq3 | descrizione -> (solo admin) registra e annuncia il
                             podio del torneo attivo nel gruppo; la descrizione
                             (facoltativa) va sotto il podio, non nello storico.
@@ -108,7 +109,7 @@ COMANDI = [
     ("squadre", "Mostra l'elenco delle squadre iscritte al torneo attivo"),
     ("ritira", "Annulla una tua iscrizione (indica il nome se ne hai più di una)"),
     ("torneo", "Mostra il nome del torneo attualmente attivo"),
-    ("storico", "Elenco tornei a pagine (/storico 2 = pagina 2), o dettagli di uno (/storico Nome)"),
+    ("storico", "Elenco tornei a pagine (/storico 2 = pagina 2), o dettagli di uno (/storico #N o /storico Nome)"),
     ("help", "Mostra questa lista di comandi"),
     ("podio", "[admin] Annuncia il podio — /podio Sq1 | Sq2 | Sq3 | descrizione (facoltativa)"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
@@ -662,8 +663,8 @@ async def nometorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def torneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = db_connect()
-    _, nome_torneo = get_torneo_attivo(conn)
-    await update.message.reply_text(f"🏓 Torneo attuale: {nome_torneo}")
+    tid, nome_torneo = get_torneo_attivo(conn)
+    await update.message.reply_text(f"🏓 Torneo attuale: #{tid} {nome_torneo}")
 
 
 async def storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -687,22 +688,32 @@ async def storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for tid, nome, chiuso, n_squadre, primo in righe:
             stato_icona = " 🔵 (attivo)" if not chiuso else ""
             vincitori = f" — 🥇 {primo}" if primo else ""
-            testo += f"• {nome} — {n_squadre} squadre{vincitori}{stato_icona}\n"
+            testo += f"• #{tid} {nome} — {n_squadre} squadre{vincitori}{stato_icona}\n"
         if pagina < pagine:
             testo += f"\nPagina successiva: /storico {pagina + 1}"
-        testo += "\nDettagli di uno specifico: /storico NomeTorneo"
+        testo += "\nDettagli di uno specifico: /storico #N (o /storico NomeTorneo)"
         await update.message.reply_text(testo)
         return
 
     nome_cercato = " ".join(context.args).strip()
-    torneo_row = conn.execute(
-        "SELECT id, nome, podio_primo, podio_secondo, podio_terzo FROM tornei "
-        "WHERE LOWER(nome) = LOWER(?) ORDER BY id DESC LIMIT 1",
-        (nome_cercato,),
-    ).fetchone()
+    m = re.fullmatch(r"#\s*(\d+)", nome_cercato)
+    if m:
+        # /storico #12 -> per numero (id fisso: non cambia se un torneo viene eliminato)
+        torneo_row = conn.execute(
+            "SELECT id, nome, podio_primo, podio_secondo, podio_terzo FROM tornei WHERE id = ?",
+            (int(m.group(1)),),
+        ).fetchone()
+        non_trovato = f"Nessun torneo con numero #{m.group(1)}. Elenco con /storico"
+    else:
+        torneo_row = conn.execute(
+            "SELECT id, nome, podio_primo, podio_secondo, podio_terzo FROM tornei "
+            "WHERE LOWER(nome) = LOWER(?) ORDER BY id DESC LIMIT 1",
+            (nome_cercato,),
+        ).fetchone()
+        non_trovato = f"Nessun torneo trovato con nome '{nome_cercato}'."
 
     if not torneo_row:
-        await update.message.reply_text(f"Nessun torneo trovato con nome '{nome_cercato}'.")
+        await update.message.reply_text(non_trovato)
         return
 
     tid, nome, primo, secondo, terzo = torneo_row
@@ -710,7 +721,7 @@ async def storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "SELECT nome_squadra FROM squadre WHERE torneo_id = ? ORDER BY iscritto_il", (tid,)
     ).fetchall()
 
-    testo = f"📜 {nome}\n\n"
+    testo = f"📜 #{tid} {nome}\n\n"
     if primo or secondo or terzo:
         testo += "🏆 Podio:\n"
         if primo:
