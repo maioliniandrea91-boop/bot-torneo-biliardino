@@ -72,6 +72,14 @@ tr+tr td{border-top:1px solid var(--line)}
 .seg button.on{background:var(--bg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 select{font:inherit;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--tx);max-width:100%}
 .muted{color:var(--hint);font-size:13px}
+/* pannello Tornei */
+input.t,textarea.t{font:inherit;width:100%;padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--tx)}
+textarea.t{min-height:64px;resize:vertical}
+.duo{display:flex;gap:6px}.duo input{flex:1;min-width:0}
+.campo{margin:6px 0}.campo label{display:block;font-size:12px;color:var(--hint);margin:0 0 3px 2px}
+.ok-line{color:var(--ok);font-weight:600;font-size:13px;margin-top:6px}
+.prev-podio{white-space:pre-wrap}.prev-podio img{width:100%;border-radius:10px;margin-bottom:8px;display:block}
+.tap{cursor:pointer}
 .empty{text-align:center;color:var(--hint);padding:28px 10px}
 .podio{display:grid;gap:6px}
 .podio div{display:flex;gap:10px;align-items:center;font-weight:700;font-size:17px}
@@ -172,7 +180,9 @@ async function carica(forza){
     if (r.status === 401) { $("#main").innerHTML='<div class="empty">Sessione scaduta: chiudi e riapri l\'app.</div>'; return; }
     const d = await r.json();
     if (d.invariato) return;
-    S = d; if (!foglioAperto) render();
+    const primo = !S;
+    S = d; if (!foglioAperto && (tab !== "tornei" || primo)) render();
+    if (primo && tab === "tornei") caricaPannello();
   }catch(e){ /* rete assente: riprova al prossimo giro */ }
 }
 
@@ -267,6 +277,7 @@ function render(){
   if (["gironi","ko","finito"].includes(S.fase)) schede.push(["partite","Partite"],["gironi","Gironi"]);
   if (["ko","finito"].includes(S.fase)) schede.push(["tabellone","Tabellone"]);
   if (admin()) schede.push(["admin","Gestione"]);
+  if (admin()) { if (["nessuna","iscrizioni"].includes(S.fase)) schede.unshift(["tornei","Tornei"]); else schede.push(["tornei","Tornei"]); }
   if (!schede.length) schede.push(["attesa","Torneo"]);
   if (!tab || !schede.some(s=>s[0]===tab)) tab = schede[0][0];
   $("#prova").innerHTML = S.prova && veroAdmin()
@@ -276,7 +287,7 @@ function render(){
   $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
   const brkPrima = $("#brk"), scrollPrima = brkPrima ? brkPrima.scrollLeft : null;
   $("#main").className = "v-" + tab;
-  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa})[tab]();
+  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa, tornei:vTornei})[tab]();
   const brk = $("#brk");
   if (brk){
     if (scrollPrima !== null) brk.scrollLeft = scrollPrima;
@@ -286,7 +297,7 @@ function render(){
     }
   }
 }
-function vai(k){ tab = k; render(); window.scrollTo(0,0); }
+function vai(k){ tab = k; render(); window.scrollTo(0,0); if (k === "tornei") caricaPannello(); }
 
 function vAttesa(){
   const n = (S.iscritte || S.coppie || []).length;
@@ -641,6 +652,167 @@ async function salvaRisultato(){
   const giochi = giochiCompleti(), p = bozza.p;
   const r = await azione({azione: admin() ? "risultato" : "proponi", pid:p.id, giochi}, admin() ? "Risultato salvato" : "Inviato: aspetta la conferma");
   if (r) chiudiFoglio();
+}
+
+/* ---------- pannello Tornei (admin) ---------- */
+let P = null, pSub = "attivo", pPag = 1, pB = {g1:"", g2:""}, pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[]};
+async function caricaPannello(){
+  try{
+    const r = await fetch("/api/pannello?pagina=" + pPag, {headers:{"X-Init-Data":INIT}});
+    const d = await r.json();
+    if (!r.ok){ toast(d.errore || "Errore", true); return; }
+    P = d; pPag = d.storico.pagina;
+    if (pod.tid === null) scegliTorneoPodio(d.podio_proposto, false);
+    if (tab === "tornei" && !foglioAperto) render();
+  }catch(e){ toast("Connessione assente", true); }
+}
+async function pAz(dati, chiudi){
+  try{
+    const r = await fetch("/api/pannello", {method:"POST", headers:{"X-Init-Data":INIT,"Content-Type":"application/json"}, body:JSON.stringify(dati)});
+    const d = await r.json();
+    if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return null; }
+    vibra("success");
+    if (d.testo) toast(d.testo.split("\n")[0]);
+    if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);
+    if (chiudi) chiudiFoglio();
+    await caricaPannello();
+    return d;
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+const datalistGiocatori = () => `<datalist id="dlG">${(P.giocatori||[]).map(g=>`<option value="${esc(g)}">`).join("")}</datalist>`;
+function vTornei(){
+  if (!P) return '<div class="empty">Caricamento…</div>';
+  let h = `<section><div class="seg">${[["attivo","Torneo attivo"],["storico","Storico"],["podio","Podio"]].map(([k,n])=>`<button class="${pSub===k?"on":""}" onclick="pSub='${k}';render()">${n}</button>`).join("")}</div></section>`;
+  h += datalistGiocatori();
+  return h + ({attivo:vPAttivo, storico:vPStorico, podio:vPPodio})[pSub]();
+}
+function vPAttivo(){
+  const a = P.attivo, n = a.squadre.length, L = P.limiti;
+  let h = `<section><h2>#${a.id} ${esc(a.nome)}</h2><div class="card">
+    <div class="row"><span>Iscritte</span><b>${n}/${a.max}</b></div>
+    <div class="row"><span>Iscrizioni</span><div class="seg" style="width:180px"><button class="${a.aperte?"on":""}" onclick="pAz({azione:'iscrizioni',aperte:true})">Aperte</button><button class="${a.aperte?"":"on"}" onclick="pAz({azione:'iscrizioni',aperte:false})">Chiuse</button></div></div>
+    <div class="row"><span>Massimo coppie</span><div class="step"><button onclick="pAz({azione:'max',valore:${Math.max(L.min,a.max-1)}})" ${a.max<=L.min?"disabled":""}>−</button><span>${a.max}</span><button onclick="pAz({azione:'max',valore:${Math.min(L.max,a.max+1)}})" ${a.max>=L.max?"disabled":""}>+</button></div></div>
+    <div class="row"><span>Soglia conferma</span><div class="step"><button onclick="pAz({azione:'soglia',valore:${Math.max(2,a.soglia-1)}})" ${a.soglia<=2?"disabled":""}>−</button><span>${a.soglia}</span><button onclick="pAz({azione:'soglia',valore:${Math.min(L.max,a.soglia+1)}})" ${a.soglia>=L.max?"disabled":""}>+</button></div></div>
+    ${a.conferma ? `<div class="ok-line">${esc(a.conferma.split("!")[0])}!</div>` : ""}
+  </div></section>`;
+  h += `<section><h2>Iscrivi coppia</h2><div class="card">
+    <div class="duo"><input class="t" list="dlG" placeholder="Giocatore 1" value="${esc(pB.g1)}" oninput="pB.g1=this.value" autocomplete="off"><input class="t" list="dlG" placeholder="Giocatore 2" value="${esc(pB.g2)}" oninput="pB.g2=this.value" autocomplete="off"></div>
+    <button class="b pri big" style="margin-top:8px" onclick="pIscrivi()" ${a.aperte?"":"disabled"}>Iscrivi</button>
+    <p class="muted" style="margin:6px 2px 0">${a.aperte ? "La lista aggiornata va in fondo al gruppo." : "Iscrizioni chiuse: riaprile per iscrivere."}${P.gruppo ? "" : " ⚠️ Nessun gruppo registrato."}</p>
+  </div></section>`;
+  h += `<section><h2>Coppie iscritte (${n})</h2><div class="card">${a.squadre.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c)}</span><span style="display:flex;gap:6px"><button class="b" onclick="pApriRinomina(${i+1})">✏️</button><button class="b red" onclick="pRimuovi(${jsq(c)})">🗑</button></span></div>`).join("") || '<span class="muted">Nessuna coppia</span>'}</div>
+    <button class="b big" onclick="pAz({azione:'esporta'})" ${n?"":"disabled"}>📄 Elenco in Word nella chat col bot</button></section>`;
+  return h;
+}
+async function pIscrivi(){
+  if (!pB.g1.trim() || !pB.g2.trim()) { toast("Scrivi entrambi i giocatori", true); return; }
+  const r = await pAz({azione:"iscrivi", g1:pB.g1, g2:pB.g2});
+  if (r) { pB = {g1:"", g2:""}; render(); }
+}
+async function pRimuovi(nome){
+  if (!await chiedi(`Togliere ${nome} dal torneo attivo?\nLa lista aggiornata va nel gruppo.`)) return;
+  pAz({azione:"rimuovi", nome});
+}
+function apriFoglio(html){ foglioAperto = true; $("#sheet").innerHTML = html; $("#veil").classList.add("on"); $("#sheet").classList.add("on"); }
+function pApriRinomina(pos){
+  const nome = P.attivo.squadre[pos-1], parti = nome.split("-");
+  bozza = {ren: pos, g1: parti.length===2 ? parti[0] : nome, g2: parti.length===2 ? parti[1] : ""};
+  apriFoglio(`<div class="muted">Coppia n° ${pos}</div><div style="font-weight:700;margin:4px 0 10px">Rinomina ${esc(nome)}</div>$
+    <div class="duo"><input class="t" list="dlG" value="${esc(bozza.g1)}" oninput="bozza.g1=this.value" autocomplete="off"><input class="t" list="dlG" value="${esc(bozza.g2)}" oninput="bozza.g2=this.value" autocomplete="off"></div>
+    <div class="actions" style="margin-top:12px"><button class="b" onclick="chiudiFoglio()">Annulla</button><button class="b pri" onclick="pAz({azione:'rinomina',pos:bozza.ren,g1:bozza.g1,g2:bozza.g2},true)">Salva</button></div>`);
+}
+function vPStorico(){
+  const st = P.storico;
+  let h = `<section><h2>Tornei — pagina ${st.pagina}/${st.pagine} (${st.totale})</h2><div class="card">${st.tornei.map(t=>`<div class="row tap" onclick="pDettaglio(${t.id})"><span><b>#${t.id}</b> ${esc(t.nome)}${t.attivo?' <span class="pill live">attivo</span>':""}<br><span class="muted">${t.squadre} squadre${t.primo ? " · 🥇 " + esc(t.primo) : " · senza podio"}</span></span><span class="muted">›</span></div>`).join("")}</div>`;
+  if (st.pagine > 1) h += `<div class="actions"><button class="b" onclick="pPag--;caricaPannello()" ${st.pagina<=1?"disabled":""}>‹ Più recenti</button><button class="b" onclick="pPag++;caricaPannello()" ${st.pagina>=st.pagine?"disabled":""}>Più vecchi ›</button></div>`;
+  return h + "</section>";
+}
+async function pDettaglio(id){
+  const r = await pAzSilenziosa({azione:"dettaglio", id});
+  if (!r) return;
+  const t = r.torneo, m = ["🥇","🥈","🥉"];
+  const podio = t.podio.some(x=>x) ? t.podio.map((c,i)=>c?`<div>${m[i]} ${esc(c)}</div>`:"").join("") : '<span class="muted">Nessun podio</span>';
+  apriFoglio(`<div class="muted">#${t.id}${t.attivo?" · torneo attivo":""}</div><div style="font-weight:700;margin:4px 0 10px">${esc(t.nome)}</div>
+    <div class="card podio">${podio}</div>
+    <h2>Squadre (${t.squadre.length})</h2><div class="card">${t.squadre.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c)}</span></div>`).join("") || '<span class="muted">Nessuna</span>'}</div>
+    <div class="actions"><button class="b pri" onclick="chiudiFoglio();pSub='podio';scegliTorneoPodio(${t.id},true)">🏆 ${t.podio[0]?"Rifai il podio":"Podio"}</button>${t.attivo ? "" : `<button class="b red" onclick="pElimina(${t.id})">🗑 Elimina</button>`}<button class="b" onclick="chiudiFoglio()">Chiudi</button></div>`);
+}
+async function pAzSilenziosa(dati){
+  try{
+    const r = await fetch("/api/pannello", {method:"POST", headers:{"X-Init-Data":INIT,"Content-Type":"application/json"}, body:JSON.stringify(dati)});
+    const d = await r.json();
+    if (!d.ok){ toast(d.errore || "Errore", true); return null; }
+    return d;
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+async function pElimina(id){
+  const r = await pAzSilenziosa({azione:"elimina_esamina", id});
+  if (!r) return;
+  if (!await chiedi(r.testo + "\n\nL'eliminazione è definitiva. Confermi?")) return;
+  pAz({azione:"elimina", id}, true);
+}
+/* podio */
+async function scegliTorneoPodio(id, ridisegna){
+  pod.tid = id; pod.prev = null; pod.squadre = [];
+  const r = await pAzSilenziosa({azione:"dettaglio", id});
+  if (r) { pod.squadre = r.torneo.squadre; pod.nome = r.torneo.nome; pod.ha_podio = !!r.torneo.podio[0]; }
+  if (ridisegna !== false && tab === "tornei" && !foglioAperto) render();
+}
+function vPPodio(){
+  const tornei = [...P.storico.tornei];
+  if (pod.tid !== null && !tornei.some(t=>t.id===pod.tid)) tornei.unshift({id:pod.tid, nome:pod.nome||""});
+  let h = `<section><h2>Torneo</h2><div class="card"><select style="width:100%" onchange="scegliTorneoPodio(+this.value)">${tornei.map(t=>`<option value="${t.id}" ${t.id===pod.tid?"selected":""}>#${t.id} ${esc(t.nome)}${t.id===P.podio_proposto?" (proposto)":""}</option>`).join("")}</select>
+    ${pod.ha_podio ? '<p class="muted" style="margin:6px 2px 0">⚠️ Ha già un podio: se pubblichi viene sostituito (anche nel medagliere).</p>' : ""}</div></section>`;
+  h += `<datalist id="dlS">${pod.squadre.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>`;
+  h += `<section><h2>Podio</h2><div class="card">${[["primo","🥇 Primi"],["secondo","🥈 Secondi"],["terzo","🥉 Terzi"]].map(([k,l])=>`<div class="campo"><label>${l}</label><input class="t" list="dlS" value="${esc(pod[k])}" oninput="pod.${k}=this.value;pod.prev=null" autocomplete="off" placeholder="Nome1-Nome2"></div>`).join("")}
+    <div class="campo"><label>Descrizione (facoltativa)</label><textarea class="t" oninput="pod.desc=this.value;pod.prev=null">${esc(pod.desc)}</textarea></div>
+    <div class="campo"><label>Foto (facoltativa)</label><input id="podFile" type="file" accept="image/*" style="display:none" onchange="podFoto(this.files[0])"><div class="actions" style="margin-top:0"><button class="b" onclick="$('#podFile').click()">📷 ${pod.foto ? "Cambia foto" : "Scegli foto"}</button>${pod.foto ? `<button class="b red" onclick="podFoto(null)">Togli foto</button><span class="muted" style="align-self:center">✓ foto pronta</span>` : ""}</div></div>
+  </div><button class="b big" onclick="podAnteprima()">👁 Anteprima</button></section>`;
+  if (pod.prev) h += `<section><h2>Anteprima</h2><div class="card prev-podio">${pod.url ? `<img src="${pod.url}">` : ""}${esc(pod.prev.caption)}</div>
+    ${pod.prev.avviso ? `<p class="muted" style="margin:0 6px 8px">${esc(pod.prev.avviso)}</p>` : ""}
+    <button class="b pri big" onclick="podPubblica()" ${P.gruppo?"":"disabled"}>📢 Pubblica nel gruppo</button></section>`;
+  return h;
+}
+function podFoto(file){
+  pod.prev = null;
+  if (pod.url) URL.revokeObjectURL(pod.url);
+  pod.foto = null; pod.url = null;
+  if (!file) { render(); return; }
+  const img = new Image(), url = URL.createObjectURL(file);
+  img.onload = () => {   // rimpicciolisco (max 2048 px, JPEG): upload veloce anche col telefono
+    const k = Math.min(1, 2048 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas"); c.width = Math.round(img.width*k); c.height = Math.round(img.height*k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    c.toBlob(b => { pod.foto = b; pod.url = URL.createObjectURL(b); render(); }, "image/jpeg", 0.88);
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast("Foto non leggibile", true); };
+  img.src = url;
+}
+async function podInvia(modo){
+  const f = new FormData();
+  f.append("modo", modo); f.append("torneo_id", pod.tid);
+  ["primo","secondo","terzo"].forEach(k => f.append(k, pod[k])); f.append("descrizione", pod.desc);
+  if (pod.foto) f.append("foto", pod.foto, "podio.jpg");
+  try{
+    const r = await fetch("/api/pannello/podio", {method:"POST", headers:{"X-Init-Data":INIT}, body:f});
+    const d = await r.json();
+    if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return null; }
+    return d;
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+async function podAnteprima(){
+  const d = await podInvia("anteprima");
+  if (d) { pod.prev = d; render(); setTimeout(()=>window.scrollTo(0, document.body.scrollHeight), 50); }
+}
+async function podPubblica(){
+  if (!await chiedi(`Pubblicare il podio di «${pod.nome}» nel gruppo?`)) return;
+  const d = await podInvia("pubblica");
+  if (!d) return;
+  vibra("success"); toast(d.testo);
+  if (pod.url) URL.revokeObjectURL(pod.url);
+  pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[]};
+  await caricaPannello();
 }
 
 carica(true);

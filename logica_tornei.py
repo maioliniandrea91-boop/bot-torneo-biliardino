@@ -236,6 +236,20 @@ def rinomina_coppia(conn, vecchio: str, nuovo_scritto: str) -> Esito:
     return Esito(True, f"✏️ {nome_reale} → {nuovo}", {"vecchio": nome_reale, "nuovo": nuovo})
 
 
+def word_squadre(conn) -> tuple[bytes, str]:
+    """Elenco squadre del torneo attivo in Word: (contenuto, nome file)."""
+    import io
+    from docx import Document
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    documento = Document()
+    documento.add_heading(nome_torneo, level=1)
+    for _, nome_squadra in squadre_torneo(conn, torneo_id):
+        documento.add_paragraph(nome_squadra)
+    buffer = io.BytesIO()
+    documento.save(buffer)
+    return buffer.getvalue(), f"squadre_{nome_torneo}.docx"
+
+
 def svuota_torneo_attivo(conn) -> Esito:
     """Admin (/reset): cancella le iscrizioni del torneo attivo, lo storico resta."""
     torneo_id, nome_torneo = get_torneo_attivo(conn)

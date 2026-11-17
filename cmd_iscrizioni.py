@@ -3,7 +3,6 @@
 La logica sta in logica_tornei: qui solo lettura del comando e risposta in chat."""
 import io
 
-from docx import Document
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -147,23 +146,10 @@ async def esporta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text(SOLO_ADMIN)
         return
-    conn = db_connect()
-    torneo_id, nome_torneo = get_torneo_attivo(conn)
-
-    documento = Document()
-    documento.add_heading(nome_torneo, level=1)
-    for _, nome_squadra in L.squadre_torneo(conn, torneo_id):
-        documento.add_paragraph(nome_squadra)
-    buffer = io.BytesIO()
-    documento.save(buffer)
-    buffer.seek(0)
-    buffer.name = f"squadre_{nome_torneo}.docx"
-
-    await context.bot.send_document(
-        chat_id=update.effective_user.id,
-        document=buffer,
-        filename=f"squadre_{nome_torneo}.docx",
-    )
+    contenuto, nome_file = L.word_squadre(db_connect())
+    buffer = io.BytesIO(contenuto)
+    buffer.name = nome_file
+    await context.bot.send_document(chat_id=update.effective_user.id, document=buffer, filename=nome_file)
     await update.message.reply_text("Elenco squadre inviato in privato (Word).")
 
 

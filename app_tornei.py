@@ -1179,7 +1179,8 @@ async def _errori_server(req, handler):
 
 
 def crea_web_app(bot=None, jq=None) -> web.Application:
-    app = web.Application(middlewares=[_errori_server])
+    import pannello   # qui e non in testa: pannello legge config (serve BOT_TOKEN)
+    app = web.Application(middlewares=[_errori_server], client_max_size=pannello.MAX_FOTO + 1024 * 1024)
     app["bot"] = bot
     app["jq"] = jq
     app.router.add_get("/", lambda r: web.Response(text="ok"))
@@ -1187,6 +1188,7 @@ def crea_web_app(bot=None, jq=None) -> web.Application:
     app.router.add_get("/tv/{token}", h_tv)
     app.router.add_get("/api/stato", h_stato)
     app.router.add_post("/api/azione", h_azione)
+    pannello.aggiungi_rotte(app, _utente, lambda uid: _is_admin(uid), _conn)   # pannello admin «Tornei»
     app.router.add_static("/static/", CARTELLA_WEB)          # mascotte ridotta
     app.router.add_static("/assets/", CARTELLA_ASSETS)       # font Bebas e Yellowtail
     return app

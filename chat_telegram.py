@@ -72,6 +72,14 @@ async def pubblica_lista(update: Update, context: ContextTypes.DEFAULT_TYPE, con
     await cancella_comando(update)
 
 
+async def pubblica_lista_gruppo(bot, conn, chat_id: int, intestazione: str = ""):
+    """Dal pannello admin: lista nuova in fondo al gruppo (la vecchia viene tolta),
+    come dopo un /iscrivi scritto nel gruppo."""
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    testo = testo_squadre(conn, torneo_id, nome_torneo)
+    await sostituisci_lista(bot, conn, chat_id, f"{intestazione}\n\n{testo}" if intestazione else testo)
+
+
 async def ripubblica_lista_gruppo(bot, conn, chat_id: int):
     """Chiamata dalla ripubblicazione della locandina: rimette la lista sotto
     la locandina, togliendo la precedente. Se non c'è nessuna iscritta, salta."""

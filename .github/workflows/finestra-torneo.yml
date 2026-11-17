@@ -38,3 +38,5 @@ jobs:
         run: python test_funzioni.py
       - name: Test comandi (iscrivi, storico, podio, locandina, sfida…)
         run: python test_comandi.py
+      - name: Test pannello admin Tornei (Mini App)
+        run: python test_pannello.py
