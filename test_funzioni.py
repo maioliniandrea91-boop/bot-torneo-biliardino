@@ -149,7 +149,7 @@ def test_ripristino():
 
 
 def test_nomi_squadra():
-    import bot_iscrizioni_torneo as B
+    import logica_tornei as B
     casi = {
         "Gianni🔥Pinna": "Gianni-Pinna",
         "gianni 🔥 pinna": "Gianni-Pinna",
