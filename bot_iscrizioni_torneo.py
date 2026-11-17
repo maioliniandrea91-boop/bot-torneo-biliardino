@@ -25,9 +25,12 @@ COSA FA:
 - /storico [pagina]       -> elenco di tutti i tornei, 10 per pagina
 - /storico #N | Nome      -> mostra le squadre e il podio di un torneo passato
                             (#N = numero del torneo nell'elenco, fisso nel tempo)
-- /podio Sq1 | Sq2 | Sq3 | descrizione -> (solo admin) registra e annuncia il
-                            podio del torneo attivo nel gruppo; la descrizione
-                            (facoltativa) va sotto il podio, non nello storico.
+- /podio [#N] Sq1 | Sq2 | Sq3 | descrizione -> (solo admin) registra e annuncia
+                            il podio nel gruppo; senza #N è il torneo attivo, con #N
+                            un torneo dello storico. La descrizione (facoltativa)
+                            va sotto il podio, non nello storico. Se il torneo
+                            attivo è vuoto chiede di indicare #N; un podio già
+                            presente si sostituisce solo dall'anteprima in privato.
                             Con foto: comando nella didascalia della foto,
                             oppure in risposta alla foto. In privato col bot
                             mostra l'anteprima e, su "Pubblica", lo manda nel
@@ -111,7 +114,7 @@ COMANDI = [
     ("torneo", "Mostra il nome del torneo attualmente attivo"),
     ("storico", "Elenco tornei a pagine (/storico 2 = pagina 2), o dettagli di uno (/storico #N o /storico Nome)"),
     ("help", "Mostra questa lista di comandi"),
-    ("podio", "[admin] Annuncia il podio — /podio Sq1 | Sq2 | Sq3 | descrizione (facoltativa)"),
+    ("podio", "[admin] Annuncia il podio — /podio [#N] Sq1 | Sq2 | Sq3 | descrizione (facoltativa)"),
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
     ("rinomina", "[admin] Corregge il nome di una squadra — /rinomina 3 | Antonio-Eva (3 = numero in /squadre)"),
@@ -755,6 +758,12 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         testo_args = re.sub(r"^/podio(?:@\w+)?", "", msg.caption, count=1, flags=re.IGNORECASE)
     else:
         testo_args = " ".join(context.args) if context.args else ""
+    # numero del torneo facoltativo in testa: "/podio #12 Sq1 | ..." (numeri in /storico)
+    num_torneo = None
+    m = re.match(r"\s*#\s*(\d+)\s*", testo_args)
+    if m:
+        num_torneo = int(m.group(1))
+        testo_args = testo_args[m.end():]
     parti = [s.strip() for s in testo_args.split("|")]
     squadre_podio = [s for s in parti[:3] if s]
     # dal 4° campo in poi: descrizione (eventuali "|" nella descrizione restano)
@@ -762,14 +771,51 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(parti) < 3 or len(squadre_podio) != 3:
         await update.message.reply_text(
-            "Uso corretto: /podio Squadra1 | Squadra2 | Squadra3 | descrizione (facoltativa)\n"
+            "Uso corretto: /podio [#N] Squadra1 | Squadra2 | Squadra3 | descrizione (facoltativa)\n"
+            "#N = numero del torneo in /storico (senza: torneo attivo).\n"
             "Per allegare la foto: scrivi il comando nella didascalia della foto, "
             "oppure rispondi alla foto con il comando."
         )
         return
 
     conn = db_connect()
-    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    privato = update.effective_chat.type == "private"
+    if num_torneo is not None:
+        row = conn.execute("SELECT id, nome FROM tornei WHERE id = ?", (num_torneo,)).fetchone()
+        if not row:
+            await update.message.reply_text(f"Nessun torneo con numero #{num_torneo}. Elenco con /storico")
+            return
+        torneo_id, nome_torneo = row
+    else:
+        torneo_id, nome_torneo = get_torneo_attivo(conn)
+        # sicurezza: torneo attivo senza squadre = quasi certamente appena aperto con
+        # la locandina, il podio è del torneo precedente -> mi fermo e chiedo #N
+        n_squadre = conn.execute(
+            "SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_id,)
+        ).fetchone()[0]
+        precedente = conn.execute(
+            "SELECT id, nome FROM tornei WHERE id < ? ORDER BY id DESC LIMIT 1", (torneo_id,)
+        ).fetchone()
+        if n_squadre == 0 and precedente:
+            await update.message.reply_text(
+                f"⚠️ Il torneo attivo #{torneo_id} «{nome_torneo}» non ha squadre iscritte: "
+                f"il podio è forse del torneo precedente #{precedente[0]} «{precedente[1]}»?\n"
+                f"Rimanda il comando indicando il numero: /podio #{precedente[0]} Sq1 | Sq2 | Sq3 "
+                f"(oppure /podio #{torneo_id} … se è davvero quello attivo)."
+            )
+            return
+    vecchio = conn.execute(
+        "SELECT podio_primo, podio_secondo, podio_terzo FROM tornei WHERE id = ?", (torneo_id,)
+    ).fetchone()
+    gia_podio = vecchio and vecchio[0]
+    if gia_podio and not privato:
+        await update.message.reply_text(
+            f"⚠️ Il torneo #{torneo_id} «{nome_torneo}» ha già un podio "
+            f"(🥇 {vecchio[0]} 🥈 {vecchio[1]} 🥉 {vecchio[2]}).\n"
+            "Per sostituirlo manda il comando in chat privata col bot: "
+            "vedrai l'anteprima e confermi con il bottone."
+        )
+        return
     primo, secondo, terzo = squadre_podio
 
     caption = (
@@ -799,7 +845,7 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "foto": foto_file_id, "caption": caption,
     }
 
-    if update.effective_chat.type == "private":
+    if privato:
         # in privato: anteprima con bottoni, poi pubblicazione nel gruppo registrato
         if not chat_gruppo_registrato(conn):
             await update.message.reply_text(
@@ -813,6 +859,12 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📢 Pubblica nel gruppo", callback_data=f"pod:ok:{dati['codice']}"),
             InlineKeyboardButton("❌ Annulla", callback_data=f"pod:no:{dati['codice']}"),
         ]])
+        if gia_podio:
+            await update.message.reply_text(
+                f"⚠️ Attenzione: il torneo #{torneo_id} «{nome_torneo}» ha già un podio "
+                f"(🥇 {vecchio[0]} 🥈 {vecchio[1]} 🥉 {vecchio[2]}).\n"
+                "Se pubblichi, viene sostituito (anche nel medagliere)."
+            )
         if foto_file_id:
             await update.message.reply_photo(photo=foto_file_id, caption=caption, reply_markup=tastiera)
         else:
