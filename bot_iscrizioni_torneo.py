@@ -15,7 +15,8 @@ COSA FA:
                             iscritta (moderazione contro iscrizioni fasulle)
 - /rinomina 3 | Nuovo nome -> (solo admin) corregge il nome di una squadra
                             (numero da /squadre, oppure nome attuale | nuovo)
-- /eliminatorneo Nome CONFERMA -> (solo admin) elimina per sempre un torneo
+- /eliminatorneo #N CONFERMA -> (solo admin) elimina per sempre un torneo
+                            (anche per nome; senza CONFERMA mostra cosa elimina)
                             ARCHIVIATO dallo storico (non funziona sul
                             torneo attivo, per sicurezza)
 - /torneo                -> mostra il nome del torneo attuale
@@ -118,7 +119,7 @@ COMANDI = [
     ("nometorneo", "[admin] Apre un nuovo torneo e archivia quello attivo (richiede CONFERMA)"),
     ("rimuovi", "[admin] Rimuove qualsiasi squadra dal torneo attivo, non solo le tue"),
     ("rinomina", "[admin] Corregge il nome di una squadra — /rinomina 3 | Antonio-Eva (3 = numero in /squadre)"),
-    ("eliminatorneo", "[admin] Elimina per sempre un torneo archiviato dallo storico"),
+    ("eliminatorneo", "[admin] Elimina un torneo archiviato — /eliminatorneo #N, poi #N CONFERMA"),
     ("soglia", "[admin] Coppie minime per confermare il torneo — /soglia 8"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
@@ -576,35 +577,51 @@ async def eliminatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando admin: elimina definitivamente un torneo ARCHIVIATO dallo
     storico (utile per ripulire test o tornei vuoti). Non permette di
     eliminare il torneo attualmente attivo, per evitare di cancellare
-    per sbaglio quello su cui la gente si sta iscrivendo ora."""
+    per sbaglio quello su cui la gente si sta iscrivendo ora.
+    /eliminatorneo #N (o Nome) -> riepilogo; + CONFERMA -> elimina."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Comando riservato agli admin.")
         return
 
-    if len(context.args) < 2 or context.args[-1] != "CONFERMA":
+    args = list(context.args or [])
+    conferma = bool(args) and args[-1] == "CONFERMA"
+    if conferma:
+        args = args[:-1]
+    cercato = " ".join(args).strip()
+    if not cercato:
         await update.message.reply_text(
-            "Questo elimina PER SEMPRE un torneo dallo storico (squadre incluse).\n"
-            "Uso corretto: /eliminatorneo NomeTorneo CONFERMA"
+            "Questo elimina PER SEMPRE un torneo dallo storico (squadre e podio inclusi).\n"
+            "Uso: /eliminatorneo #N (numero in /storico) per vedere cosa elimina, "
+            "poi /eliminatorneo #N CONFERMA.\n"
+            "Funziona anche con il nome: /eliminatorneo NomeTorneo CONFERMA"
         )
         return
 
-    nome_cercato = " ".join(context.args[:-1]).strip()
     conn = db_connect()
-
-    torneo_row = conn.execute(
-        "SELECT id, chiuso FROM tornei WHERE LOWER(nome) = LOWER(?) ORDER BY id DESC LIMIT 1",
-        (nome_cercato,),
-    ).fetchone()
+    m = re.fullmatch(r"#\s*(\d+)", cercato)
+    if m:
+        torneo_row = conn.execute(
+            "SELECT id, nome, chiuso, podio_primo, podio_secondo, podio_terzo FROM tornei WHERE id = ?",
+            (int(m.group(1)),),
+        ).fetchone()
+        non_trovato = f"Nessun torneo con numero #{m.group(1)}. Elenco con /storico"
+    else:
+        torneo_row = conn.execute(
+            "SELECT id, nome, chiuso, podio_primo, podio_secondo, podio_terzo FROM tornei "
+            "WHERE LOWER(nome) = LOWER(?) ORDER BY id DESC LIMIT 1",
+            (cercato,),
+        ).fetchone()
+        non_trovato = f"Nessun torneo trovato con nome '{cercato}'."
 
     if not torneo_row:
-        await update.message.reply_text(f"Nessun torneo trovato con nome '{nome_cercato}'.")
+        await update.message.reply_text(non_trovato)
         return
 
-    torneo_id, chiuso = torneo_row
+    torneo_id, nome, chiuso, primo, secondo, terzo = torneo_row
     if not chiuso:
         await update.message.reply_text(
-            "Non puoi eliminare il torneo ATTIVO. Aprine prima uno nuovo con "
-            "/nometorneo per archiviarlo, poi elimina quello archiviato."
+            f"Non puoi eliminare il torneo ATTIVO (#{torneo_id} «{nome}»). Aprine prima uno "
+            "nuovo (locandina o /nometorneo) per archiviarlo, poi elimina quello archiviato."
         )
         return
 
@@ -612,13 +629,27 @@ async def eliminatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_id,)
     ).fetchone()[0]
 
+    if not conferma:
+        testo = f"🗑️ Stai per eliminare #{torneo_id} «{nome}»: {n_squadre} squadre"
+        if primo:
+            testo += f", podio 🥇 {primo} 🥈 {secondo} 🥉 {terzo} (esce anche dal medagliere)"
+        testo += f".\nPer confermare: /eliminatorneo #{torneo_id} CONFERMA"
+        await update.message.reply_text(testo)
+        return
+
     conn.execute("DELETE FROM squadre WHERE torneo_id = ?", (torneo_id,))
+    # dati dell'app tornei legati a quel torneo (se le tabelle esistono)
+    for tabella in ("app_tornei", "app_messaggi", "app_storia"):
+        try:
+            conn.execute(f"DELETE FROM {tabella} WHERE torneo_id = ?", (torneo_id,))
+        except sqlite3.OperationalError:
+            pass
     conn.execute("DELETE FROM tornei WHERE id = ?", (torneo_id,))
     conn.commit()
 
     await update.message.reply_text(
-        f"🗑️ Torneo '{nome_cercato}' eliminato definitivamente dallo storico "
-        f"({n_squadre} squadre rimosse con lui)."
+        f"🗑️ Torneo #{torneo_id} «{nome}» eliminato definitivamente dallo storico "
+        f"({n_squadre} squadre rimosse con lui). Gli altri tornei mantengono il loro numero."
     )
 
 
