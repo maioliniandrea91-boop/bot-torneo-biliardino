@@ -21,7 +21,7 @@ def avvia():
 
 def test_completa_gironi_e_pdf(conn):
     import tabellone_pdf
-    for n, g in ((12, 3), (13, 4), (7, 2), (18, 3)):
+    for n, g in ((12, 3), (13, 4), (7, 2), (18, 3), (24, 4), (32, 4)):
         A.avvia_prova(conn, 1, n)
         A.esegui(conn, 1, {"azione": "crea_gironi", "n_gironi": g, "metodo": "sorteggio"})
         A.esegui(conn, 1, {"azione": "simula"})

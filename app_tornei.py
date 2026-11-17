@@ -85,7 +85,10 @@ NOMI_PROVA = ["Alfa", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "H
               "India", "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
               "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Xray",
               "Yankee", "Zulu", "Ares", "Bora", "Cielo", "Duna", "Etna", "Faro", "Gelo",
-              "Iris", "Luna", "Neve"]
+              "Iris", "Luna", "Neve", "Alba", "Brina", "Corallo", "Dardo", "Fiume", "Grano",
+              "Isola", "Lampo", "Mare", "Nube", "Onda", "Pino", "Quercia", "Rupe", "Sole", "Tuono",
+              "Vento", "Zefiro", "Abete", "Baia", "Cima", "Fonte", "Gemma", "Lago", "Monte", "Nido",
+              "Prato", "Rosa"]   # 64 nomi = fino a 32 coppie finte
 
 AZIONI_ADMIN = {"prepara", "anteprima_gironi", "crea_gironi", "imposta", "formato",
                 "avvia", "ferma", "chiama", "risultato", "ritira", "crea_tabellone",
@@ -1057,8 +1060,8 @@ async def cmd_provatorneo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _rispondi(update, context, "Usalo in chat privata con il bot.")
         return
     arg = (context.args or ["12"])[0]
-    if not arg.isdigit() or not 4 <= int(arg) <= 18:
-        await update.message.reply_text("Uso: /provatorneo N (coppie finte, da 4 a 18; predefinito 12)")
+    if not arg.isdigit() or not 4 <= int(arg) <= 32:
+        await update.message.reply_text("Uso: /provatorneo N (coppie finte, da 4 a 32; predefinito 12)")
         return
     conn = _conn()
     avvia_prova(conn, uid, int(arg))

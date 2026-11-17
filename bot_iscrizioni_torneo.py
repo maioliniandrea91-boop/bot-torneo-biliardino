@@ -36,6 +36,8 @@ COSA FA:
                             oppure in risposta alla foto. In privato col bot
                             mostra l'anteprima e, su "Pubblica", lo manda nel
                             gruppo registrato con /registragruppo.
+- /maxcoppie [N]          -> (solo admin) coppie massime del torneo attivo, 4-32
+                            (predefinito 18; di norma si imposta con la locandina)
 - /chiudi                -> (solo admin) blocca nuove iscrizioni
 - /apri                  -> (solo admin) riapre le iscrizioni
 - /esporta               -> (solo admin) invia elenco squadre in Word (solo nomi) in privato
@@ -61,7 +63,7 @@ STRUTTURA DEL CODICE (questo file avvia soltanto il bot)
                      Telegram: la usano i comandi e la userà il pannello admin
 - chat_telegram.py   chat pulita: lista unica, avvisi che spariscono
 - cmd_iscrizioni.py  /iscrivi /squadre /ritira /rimuovi /rinomina /soglia
-                     /chiudi /apri /esporta /reset
+                     /maxcoppie /chiudi /apri /esporta /reset
 - cmd_tornei.py      /torneo /nometorneo /storico /eliminatorneo /podio
 - cmd_sondaggio.py   sondaggio del lunedì e /registragruppo
 - menu.py            /help /start e menu dei comandi di Telegram
@@ -84,7 +86,8 @@ import comando_locandina
 import servizio
 import statistiche
 from chat_telegram import cancella_comando, rispondi, ripubblica_lista_gruppo
-from cmd_iscrizioni import apri, chiudi, esporta, iscrivi, reset, rimuovi, rinomina, ritira, soglia, squadre
+from cmd_iscrizioni import (apri, chiudi, esporta, iscrivi, maxcoppie, reset, rimuovi, rinomina, ritira, soglia,
+                            squadre)
 from cmd_sondaggio import (anteprimasondaggio, modificasondaggio, registragruppo, sondaggio,
                            sondaggio_automatico, vedisondaggio)
 from cmd_tornei import bottoni_podio, eliminatorneo, nometorneo, podio, storico, torneo
@@ -122,6 +125,7 @@ def main():
     ))
     app.add_handler(CallbackQueryHandler(bottoni_podio, pattern=r"^pod:"))
     app.add_handler(CommandHandler("soglia", soglia))
+    app.add_handler(CommandHandler("maxcoppie", maxcoppie))
     app.add_handler(CommandHandler("chiudi", chiudi))
     app.add_handler(CommandHandler("apri", apri))
     app.add_handler(CommandHandler("esporta", esporta))

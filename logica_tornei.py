@@ -11,8 +11,8 @@ from datetime import datetime
 
 import comando_locandina
 import statistiche
-from config import MAX_SQUADRE, PER_PAGINA_STORICO
-from database import get_torneo_attivo, iscrizioni_aperte
+from config import LIMITE_COPPIE_MAX, LIMITE_COPPIE_MIN, PER_PAGINA_STORICO
+from database import get_torneo_attivo, iscrizioni_aperte, max_coppie
 
 MAX_CAPTION = 1024  # limite Telegram per la didascalia di una foto
 TESTO_ISCRIZIONI_CHIUSE = "Le iscrizioni sono chiuse. Contatta un admin."
@@ -90,12 +90,13 @@ def conta_squadre(conn, torneo_id: int) -> int:
     return conn.execute("SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_id,)).fetchone()[0]
 
 
-def riga_conferma(conn, iscritte: int) -> str:
-    """Riga di conferma in fondo alla lista squadre, solo a soglia raggiunta."""
-    soglia = comando_locandina.get_soglia(conn)
+def riga_conferma(conn, iscritte: int, massimo: int) -> str:
+    """Riga di conferma in fondo alla lista squadre, solo a soglia raggiunta.
+    Se il massimo del torneo è sotto la soglia, vale il massimo (torneo pieno = confermato)."""
+    soglia = min(comando_locandina.get_soglia(conn), massimo)
     if iscritte < soglia:
         return ""
-    restano = MAX_SQUADRE - iscritte
+    restano = massimo - iscritte
     if restano <= 0:
         return f"✅ Torneo confermato! Raggiunte {soglia} coppie. Torneo al completo."
     posti = "c'è ancora 1 posto" if restano == 1 else f"ci sono ancora {restano} posti"
@@ -111,8 +112,9 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     testo = f"🏆 Squadre iscritte — {nome_torneo}\n\n"
     for i, (_, nome) in enumerate(righe, start=1):
         testo += f"{i}. {nome}\n"
-    testo += f"\nTotale: {len(righe)}/{MAX_SQUADRE}"
-    stato_torneo = riga_conferma(conn, len(righe))
+    massimo = max_coppie(conn, torneo_id)
+    testo += f"\nTotale: {len(righe)}/{massimo}"
+    stato_torneo = riga_conferma(conn, len(righe), massimo)
     if stato_torneo:
         testo += f"\n\n{stato_torneo}"
     return testo
@@ -144,9 +146,10 @@ def iscrivi_coppia(conn, user_id: int, username: str | None, nome_scritto: str, 
     if duplicato:
         return _errore(f"Il nome '{nome_squadra}' è già stato preso in questo torneo. Scegline un altro.")
 
-    if conta_squadre(conn, torneo_id) >= MAX_SQUADRE:
+    massimo = max_coppie(conn, torneo_id)
+    if conta_squadre(conn, torneo_id) >= massimo:
         return _errore(
-            f"Torneo al completo: raggiunto il limite di {MAX_SQUADRE} coppie. "
+            f"Torneo al completo: raggiunto il limite di {massimo} coppie. "
             "Contatta un admin se vuoi essere messo in lista d'attesa."
         )
 
@@ -244,8 +247,8 @@ def svuota_torneo_attivo(conn) -> Esito:
 def imposta_soglia(conn, valore: str) -> Esito:
     """Admin (/soglia): coppie minime per scrivere 'Torneo confermato'."""
     attuale = comando_locandina.get_soglia(conn)
-    if not valore.isdigit() or not 2 <= int(valore) <= MAX_SQUADRE:
-        return _errore(f"Scrivi un numero tra 2 e {MAX_SQUADRE}. Es. /soglia 8")
+    if not valore.isdigit() or not 2 <= int(valore) <= LIMITE_COPPIE_MAX:
+        return _errore(f"Scrivi un numero tra 2 e {LIMITE_COPPIE_MAX}. Es. /soglia 8")
     nuova = int(valore)
     conn.execute(
         "INSERT INTO stato (chiave, valore) VALUES (?, ?) "
@@ -254,6 +257,41 @@ def imposta_soglia(conn, valore: str) -> Esito:
     )
     conn.commit()
     return Esito(True, f"✅ Soglia di conferma: {attuale} → {nuova} coppie.")
+
+
+def valida_max_coppie(valore) -> str | None:
+    """Errore da mostrare se il massimo non va bene, altrimenti None."""
+    if not str(valore).isdigit() or not LIMITE_COPPIE_MIN <= int(valore) <= LIMITE_COPPIE_MAX:
+        return f"Il massimo di coppie va da {LIMITE_COPPIE_MIN} a {LIMITE_COPPIE_MAX}. Es. /maxcoppie 14"
+    return None
+
+
+def imposta_max_coppie(conn, valore, torneo_id: int | None = None) -> Esito:
+    """Coppie massime del torneo (attivo, se non indicato). Abbassarlo sotto le
+    iscritte non toglie nessuno: blocca solo le nuove iscrizioni."""
+    errore = valida_max_coppie(valore)
+    if errore:
+        return _errore(errore)
+    if torneo_id is None:
+        torneo_id, nome_torneo = get_torneo_attivo(conn)
+    else:
+        nome_torneo = conn.execute("SELECT nome FROM tornei WHERE id = ?", (torneo_id,)).fetchone()[0]
+    vecchio, nuovo = max_coppie(conn, torneo_id), int(valore)
+    conn.execute("UPDATE tornei SET max_coppie = ? WHERE id = ?", (nuovo, torneo_id))
+    conn.commit()
+    testo = f"✅ Massimo coppie di «{nome_torneo}»: {vecchio} → {nuovo}."
+    iscritte = conta_squadre(conn, torneo_id)
+    if iscritte > nuovo:
+        testo += (f"\n⚠️ Sono già iscritte {iscritte} coppie: non tolgo nessuno, "
+                  f"ma le nuove iscrizioni restano bloccate finché non si scende sotto {nuovo}.")
+    elif iscritte == nuovo:
+        testo += f"\nCon {iscritte} iscritte il torneo è al completo: nuove iscrizioni bloccate."
+    soglia = comando_locandina.get_soglia(conn)
+    if soglia > nuovo:
+        testo += (f"\nℹ️ La soglia di conferma ({soglia}) è sopra il massimo: "
+                  f"il torneo risulterà confermato a {nuovo} coppie, cioè quando è pieno.")
+    return Esito(True, testo, {"torneo_id": torneo_id, "vecchio": vecchio, "nuovo": nuovo,
+                               "iscritte": iscritte})
 
 
 # ======================= TORNEI (attivo e storico) =======================

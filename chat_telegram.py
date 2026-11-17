@@ -78,3 +78,17 @@ async def ripubblica_lista_gruppo(bot, conn, chat_id: int):
     torneo_id, nome_torneo = get_torneo_attivo(conn)
     if conta_squadre(conn, torneo_id):
         await sostituisci_lista(bot, conn, chat_id, testo_squadre(conn, torneo_id, nome_torneo))
+
+
+async def aggiorna_lista_gruppo(bot, conn, chat_id: int):
+    """Corregge in silenzio la lista già nel gruppo (es. dopo /maxcoppie), senza
+    mandare un messaggio nuovo. Se non c'è o non si può modificare, pazienza."""
+    msg_id = leggi_stato(conn, f"lista_msg_{chat_id}")
+    torneo_id, nome_torneo = get_torneo_attivo(conn)
+    if msg_id is None or not conta_squadre(conn, torneo_id):
+        return
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=int(msg_id),
+                                    text=testo_squadre(conn, torneo_id, nome_torneo))
+    except Exception:
+        pass  # lista cancellata a mano, troppo vecchia o identica

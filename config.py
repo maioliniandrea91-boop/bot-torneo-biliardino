@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_IDS = {int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
 DB_PATH = os.environ.get("DB_PATH", "iscrizioni.db")
-MAX_SQUADRE = 18  # limite massimo di coppie iscrivibili al torneo
+MAX_SQUADRE = 18  # coppie massime predefinite: ogni torneo nuovo parte da qui
+LIMITE_COPPIE_MIN, LIMITE_COPPIE_MAX = 4, 32   # massimo impostabile per torneo (locandina, /maxcoppie)
 PER_PAGINA_STORICO = 10
 NOME_TORNEO_INIZIALE = "Torneo"
 

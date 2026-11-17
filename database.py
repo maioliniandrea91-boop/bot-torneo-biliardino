@@ -3,7 +3,7 @@ Le altre tabelle le creano i rispettivi moduli (statistiche, locandine, app torn
 import sqlite3
 from datetime import datetime
 
-from config import CHIAVE_CHAT_GIOCO_LIBERO, DB_PATH, NOME_TORNEO_INIZIALE
+from config import CHIAVE_CHAT_GIOCO_LIBERO, DB_PATH, MAX_SQUADRE, NOME_TORNEO_INIZIALE
 
 
 def db_connect():
@@ -36,6 +36,9 @@ def db_connect():
             valore TEXT
         )
     """)
+    # massimo di coppie del singolo torneo (NULL = predefinito MAX_SQUADRE)
+    if "max_coppie" not in [r[1] for r in conn.execute("PRAGMA table_info(tornei)")]:
+        conn.execute("ALTER TABLE tornei ADD COLUMN max_coppie INTEGER")
     conn.commit()
 
     # Al primissimo avvio crea il torneo iniziale, se non esiste ancora nulla.
@@ -96,3 +99,11 @@ def chat_gruppo_registrato(conn):
     """ID del gruppo registrato con /registragruppo (o None)."""
     valore = leggi_stato(conn, CHIAVE_CHAT_GIOCO_LIBERO)
     return int(valore) if valore is not None else None
+
+
+def max_coppie(conn, torneo_id) -> int:
+    """Coppie massime iscrivibili a quel torneo (predefinito MAX_SQUADRE)."""
+    if torneo_id is None:
+        return MAX_SQUADRE
+    row = conn.execute("SELECT max_coppie FROM tornei WHERE id = ?", (torneo_id,)).fetchone()
+    return row[0] if row and row[0] else MAX_SQUADRE

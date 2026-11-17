@@ -9,9 +9,10 @@ from telegram.ext import ContextTypes
 
 import comando_locandina
 import logica_tornei as L
-from chat_telegram import pubblica_lista, rispondi
+from chat_telegram import aggiorna_lista_gruppo, pubblica_lista, rispondi
 from config import is_admin
-from database import db_connect, get_torneo_attivo, iscrizioni_aperte, set_iscrizioni
+from database import (chat_gruppo_registrato, db_connect, get_torneo_attivo, iscrizioni_aperte, max_coppie,
+                      set_iscrizioni)
 
 SOLO_ADMIN = "Comando riservato agli admin."
 
@@ -105,6 +106,25 @@ async def soglia(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await rispondi(update, context, f"Soglia attuale: {attuale} coppie. Per cambiarla: /soglia N")
         return
     await rispondi(update, context, L.imposta_soglia(conn, context.args[0]).testo)
+
+
+async def maxcoppie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: coppie massime del torneo attivo (di norma si imposta con la locandina)."""
+    if not is_admin(update.effective_user.id):
+        await rispondi(update, context, SOLO_ADMIN)
+        return
+    conn = db_connect()
+    if not context.args:
+        torneo_id, nome_torneo = get_torneo_attivo(conn)
+        await rispondi(update, context,
+                       f"Massimo coppie di «{nome_torneo}»: {max_coppie(conn, torneo_id)} "
+                       f"(iscritte {L.conta_squadre(conn, torneo_id)}). Per cambiarlo: /maxcoppie N")
+        return
+    esito = L.imposta_max_coppie(conn, context.args[0])
+    await rispondi(update, context, esito.testo)
+    gruppo = chat_gruppo_registrato(conn)
+    if esito.ok and gruppo is not None:
+        await aggiorna_lista_gruppo(context.bot, conn, gruppo)
 
 
 async def chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -28,6 +28,7 @@ COMANDI = [
     ("rinomina", "[admin] Corregge il nome di una squadra — /rinomina 3 | Antonio-Eva (3 = numero in /squadre)"),
     ("eliminatorneo", "[admin] Elimina un torneo archiviato — /eliminatorneo #N, poi #N CONFERMA"),
     ("soglia", "[admin] Coppie minime per confermare il torneo — /soglia 8"),
+    ("maxcoppie", "[admin] Coppie massime del torneo attivo (4-32) — /maxcoppie 14"),
     ("chiudi", "[admin] Blocca nuove iscrizioni al torneo attivo"),
     ("apri", "[admin] Riapre le iscrizioni"),
     ("esporta", "[admin] Invia l'elenco squadre in Word (solo nomi) in privato"),

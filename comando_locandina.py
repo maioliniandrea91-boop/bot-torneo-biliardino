@@ -8,6 +8,8 @@ FLUSSO (solo admin, in chat privata col bot):
   /locandina 16/10 5x volo              -> "MODALITÀ 5X" sopra la formula (5x mai da solo)
   /locandina 16/10 rollerball 22:00 25€ -> ora e quota opzionali
   /locandina 16/10 tradizionale premi COPPE -> "premi ..." sempre in fondo
+  /locandina 16/10 volo max14           -> coppie massime di quel torneo (4-32,
+                                           senza: 18); poi si cambia con /maxcoppie
 Il bot risponde con l'anteprima e quattro bottoni:
   📢 Pubblica ora   ⏰ Programma   ✏️ Aggiungi testo   ❌ Annulla
 Con "Programma" ti chiede quando: es. 14/10 18:00, oppure domani 18:00.
@@ -18,14 +20,14 @@ locandina esce e basta: utile per un promemoria a iscrizioni già aperte.
 
 "Ripeti ogni 48h: SÌ/NO" (predefinito SÌ): dopo la prima uscita il bot
 ripubblica la locandina circa ogni 48 ore, cancellando il post precedente e
-aggiungendo "Iscritte X/18 — restano Y posti". Si ferma da solo quando:
+aggiungendo "Iscritte X/max — restano Y posti". Si ferma da solo quando:
 il torneo è completo, hai fatto /chiudi, si apre un altro torneo, oppure
 il prossimo giro cadrebbe dopo l'inizio del torneo.
 
 Altri comandi:
   /programmate            -> locandine in attesa e ripubblicazioni attive
   /ripubblica [N] [48h]   -> rimette subito la locandina (ultima pubblicata o n° N)
-                             con "Iscritte X/18" e la lista sotto, togliendo il
+                             con "Iscritte X/max" e la lista sotto, togliendo il
                              post precedente; con 48h attiva il giro ogni 48 ore
   /annullalocandina N     -> annulla la pubblicazione programmata n° N
                              o ferma le sue ripubblicazioni
@@ -50,6 +52,8 @@ from zoneinfo import ZoneInfo
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from config import LIMITE_COPPIE_MAX, LIMITE_COPPIE_MIN
+from database import max_coppie
 from locandina import FORMULE, genera_locandina, testo_data
 
 FUSO = ZoneInfo("Europe/Rome")
@@ -92,7 +96,8 @@ def _crea_tabella(conn):
                        ("ripeti", "INTEGER NOT NULL DEFAULT 1"),         # 1 = ripubblica ogni 48h
                        ("msg_gruppo", "INTEGER"),                        # ultimo post nel gruppo
                        ("torneo_ref", "INTEGER"),                        # torneo a cui si riferisce
-                       ("prossimo_repost", "TEXT")):
+                       ("prossimo_repost", "TEXT"),
+                       ("max_coppie", "INTEGER")):                       # NULL = predefinito
         if nome not in colonne:
             conn.execute(f"ALTER TABLE locandine ADD COLUMN {nome} {tipo}")
     # data di gioco salvata anche nei tornei, per sapere se un torneo è già stato giocato
@@ -144,6 +149,11 @@ def leggi_argomenti(args: list[str]):
 
     # "volo+tradizionale" o "volo,tradizionale" valgono come parole separate
     resto = [p for t in resto for p in re.split(r"[+,]", t) if p]
+    # "max 14" = "max14"
+    for i in range(len(resto) - 1, 0, -1):
+        if resto[i - 1].lower() in ("max", "max=", "max:") and resto[i].isdigit():
+            resto[i - 1:i + 1] = ["max" + resto[i]]
+    massimo = None  # coppie massime: None = predefinito
 
     for t in resto:
         tl = t.lower()
@@ -160,6 +170,10 @@ def leggi_argomenti(args: list[str]):
                 formule.append(chiave)
         elif tl == "5x":
             cinque_x = True
+        elif re.fullmatch(r"max[=:]?\d+", tl):
+            massimo = int(re.sub(r"\D", "", tl))
+            if not LIMITE_COPPIE_MIN <= massimo <= LIMITE_COPPIE_MAX:
+                return None, f"Massimo coppie '{t}' non valido: da {LIMITE_COPPIE_MIN} a {LIMITE_COPPIE_MAX}."
         elif tl in ("e", "&"):
             continue
         else:
@@ -168,7 +182,7 @@ def leggi_argomenti(args: list[str]):
     if not formule:
         return None, "Manca la formula: scrivi rollerball, volo o tradizionale (anche più di una, anche con 5x)."
     return {"data": d, "formula": formule, "ora": ora, "quota": quota, "premi": premi,
-            "cinque_x": cinque_x}, None
+            "cinque_x": cinque_x, "max_coppie": massimo}, None
 
 
 def leggi_quando(testo: str):
@@ -290,7 +304,9 @@ async def locandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Opzionali: ora (22:00), quota (25€), premi in fondo (premi COPPE)\n"
             "Formule: rollerball, volo, tradizionale — anche più di una: /locandina 16/10 volo tradizionale\n"
             "Modalità 5X: aggiungi 5x insieme alla formula: /locandina 16/10 5x volo\n"
-            f"Se non li scrivi: ore {ORA_DEFAULT}, {QUOTA_DEFAULT} a coppia, premi in {PREMI_DEFAULT}."
+            f"Coppie massime: max14 (da {LIMITE_COPPIE_MIN} a {LIMITE_COPPIE_MAX})\n"
+            f"Se non li scrivi: ore {ORA_DEFAULT}, {QUOTA_DEFAULT} a coppia, premi in {PREMI_DEFAULT}, "
+            "massimo 18 coppie."
         )
         return
 
@@ -301,10 +317,10 @@ async def locandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = _conn()
     didascalia = _didascalia(dati)
     cur = conn.execute(
-        "INSERT INTO locandine (didascalia, stato, creato_il, nome_torneo, data_torneo, nuovo_torneo, ora_torneo) "
-        "VALUES (?, 'bozza', ?, ?, ?, 1, ?)",
+        "INSERT INTO locandine (didascalia, stato, creato_il, nome_torneo, data_torneo, nuovo_torneo, ora_torneo, "
+        "max_coppie) VALUES (?, 'bozza', ?, ?, ?, 1, ?, ?)",
         (didascalia, datetime.now(FUSO).isoformat(), _nome_torneo(conn, dati), dati["data"].isoformat(),
-         dati["ora"]),
+         dati["ora"], dati["max_coppie"]),
     )
     conn.commit()
     lid = cur.lastrowid
@@ -361,7 +377,38 @@ def _caption_anteprima(lid: int, testo: str) -> str:
                         "(stop se completo o iscrizioni chiuse).")
     else:
         piano_ripeti = "Ripubblicazione: no."
-    return f"Anteprima n° {lid}\n\nDidascalia nel gruppo:\n{testo}\n\n{piano}\n{piano_ripeti}"
+    return (f"Anteprima n° {lid}\n\nDidascalia nel gruppo:\n{testo}\n\n{piano}\n"
+            f"{_piano_max(conn, lid)}\n{piano_ripeti}")
+
+
+def _piano_max(conn, lid: int) -> str:
+    """Riga dell'anteprima sulle coppie massime."""
+    massimo, flag = conn.execute(
+        "SELECT max_coppie, nuovo_torneo FROM locandine WHERE id = ?", (lid,)).fetchone()
+    if massimo:
+        return f"Massimo coppie: {massimo}."
+    if flag:
+        return f"Massimo coppie: {max_coppie(conn, None)} (predefinito; per cambiarlo: max14 nel comando)."
+    att = _torneo_attivo(conn)
+    return f"Massimo coppie: resta {max_coppie(conn, att[0] if att else None)}."
+
+
+def _applica_max(conn, lid: int, esito_torneo: str | None) -> str:
+    """Alla pubblicazione: mette il massimo della locandina sul suo torneo.
+    Vale per il torneo appena aperto o, con 'Nuovo torneo: NO', per quello attivo.
+    Ritorna una riga per l'admin ("" se la locandina non ha un massimo)."""
+    massimo, flag, nome = conn.execute(
+        "SELECT max_coppie, nuovo_torneo, nome_torneo FROM locandine WHERE id = ?", (lid,)).fetchone()
+    if not massimo:
+        return ""
+    att = _torneo_attivo(conn)
+    aperto_ora = bool(esito_torneo) and esito_torneo.startswith("🏆")
+    if att and (aperto_ora or not flag or (nome and att[1].lower() == nome.lower())):
+        conn.execute("UPDATE tornei SET max_coppie = ? WHERE id = ?", (massimo, att[0]))
+        conn.commit()
+        return f"👥 Massimo coppie di '{att[1]}': {massimo}."
+    return (f"⚠️ Massimo {massimo} coppie NON applicato: il torneo della locandina non è stato aperto. "
+            "Quando lo apri, usa /maxcoppie.")
 
 
 def _torneo_attivo(conn):
@@ -418,11 +465,12 @@ def get_soglia(conn) -> int:
     return int(row[0]) if row else SOGLIA_DEFAULT
 
 
-def _riga_posti(iscritte: int, conn=None) -> str:
-    restano = max(0, _max_squadre - iscritte)
+def _riga_posti(iscritte: int, conn=None, torneo_id=None) -> str:
+    massimo = max_coppie(conn, torneo_id) if conn is not None else _max_squadre
+    restano = max(0, massimo - iscritte)
     posti = "resta 1 posto" if restano == 1 else f"restano {restano} posti"
-    riga = f"📋 Iscritte {iscritte}/{_max_squadre} — {posti}"
-    if conn is not None and iscritte >= get_soglia(conn):
+    riga = f"📋 Iscritte {iscritte}/{massimo} — {posti}"
+    if conn is not None and iscritte >= min(get_soglia(conn), massimo):
         riga += "\n✅ Torneo confermato"
     return riga
 
@@ -487,8 +535,8 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
         motivo = "è stato aperto un altro torneo"
     elif not _iscrizioni_aperte(conn):
         motivo = "le iscrizioni sono chiuse"
-    elif iscritte >= _max_squadre:
-        motivo = f"il torneo è completo ({iscritte}/{_max_squadre})"
+    elif iscritte >= max_coppie(conn, torneo_ref):
+        motivo = f"il torneo è completo ({iscritte}/{max_coppie(conn, torneo_ref)})"
     elif inizio is None or adesso >= inizio:
         motivo = "il torneo è già iniziato"
     if motivo:
@@ -501,7 +549,7 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
         _ferma_repost(conn, jq, lid)
         await _avvisa_admin(bot, "🔁 Ripubblicazione fermata: nessun gruppo registrato (/registragruppo).")
         return
-    didascalia = f"{_testo_completo(didascalia, extra)}\n\n{_riga_posti(iscritte, conn)}"
+    didascalia = f"{_testo_completo(didascalia, extra)}\n\n{_riga_posti(iscritte, conn, torneo_ref)}"
     try:
         nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
     except Exception as e:
@@ -541,15 +589,16 @@ async def _pubblica(bot, lid: int, job_queue=None) -> str:
         return "Nessun gruppo registrato: manda /registragruppo dentro il gruppo del circolo."
     # prima il cambio torneo, così chi vede la locandina si iscrive già a quello nuovo
     esito_torneo = _cambia_torneo(conn, lid)
+    esito_max = _applica_max(conn, lid, esito_torneo)
     att = _torneo_attivo(conn)
     iscritte = await _iscritte(conn, att[0] if att else None)
     if iscritte:  # locandina a iscrizioni già aperte: mostra subito i posti
-        didascalia = f"{didascalia}\n\n{_riga_posti(iscritte, conn)}"
+        didascalia = f"{didascalia}\n\n{_riga_posti(iscritte, conn, att[0])}"
     try:
         msg = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
     except Exception as e:
         return (f"❌ Locandina n° {lid} NON pubblicata: errore Telegram ({e})."
-                + (f"\n{esito_torneo}" if esito_torneo else ""))
+                + (f"\n{esito_torneo}" if esito_torneo else "") + (f"\n{esito_max}" if esito_max else ""))
     conn.execute(
         "UPDATE locandine SET stato = 'pubblicata', msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
         (msg.message_id, att[0] if att else None, lid),
@@ -561,7 +610,8 @@ async def _pubblica(bot, lid: int, job_queue=None) -> str:
             await _ripubblica_lista(bot, conn, gruppo)
         except Exception:
             pass
-    esito = f"✅ Locandina n° {lid} pubblicata nel gruppo." + (f"\n{esito_torneo}" if esito_torneo else "")
+    esito = (f"✅ Locandina n° {lid} pubblicata nel gruppo." + (f"\n{esito_torneo}" if esito_torneo else "")
+             + (f"\n{esito_max}" if esito_max else ""))
     ripeti = conn.execute("SELECT ripeti FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
     if ripeti and job_queue is not None:
         _avvia_repost(conn, job_queue, lid)
@@ -806,7 +856,7 @@ async def annullalocandina(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ripubblica(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/ripubblica [N] [48h] — rimette subito nel gruppo una locandina già uscita,
-    con 'Iscritte X/18' e la lista squadre sotto; toglie il post precedente.
+    con 'Iscritte X/max' e la lista squadre sotto; toglie il post precedente.
     Senza N prende l'ultima pubblicata. Con 48h attiva (o riparte da ora) il giro
     di ripubblicazione ogni ~48 ore fino all'inizio del torneo."""
     if not _is_admin(update.effective_user.id):
@@ -852,7 +902,7 @@ async def ripubblica(update: Update, context: ContextTypes.DEFAULT_TYPE):
     iscritte = await _iscritte(conn, torneo_ref) if not avviso else 0
     testo = _testo_completo(didascalia, extra)
     if not avviso:
-        testo += f"\n\n{_riga_posti(iscritte, conn)}"
+        testo += f"\n\n{_riga_posti(iscritte, conn, torneo_ref)}"
     try:
         nuovo = await context.bot.send_photo(chat_id=gruppo, photo=file_id, caption=testo)
     except Exception as e:
@@ -891,13 +941,13 @@ async def _modifica_pubblicata(bot, lid: int, testo: str) -> str:
     didascalia, msg_gruppo, torneo_ref, _ = row
     extra = None if testo.lower() == "nessuno" else testo
     completo = _testo_completo(didascalia, extra)
-    # riga "Iscritte X/18" solo se il torneo della locandina è ancora quello attivo
+    # riga "Iscritte X/max" solo se il torneo della locandina è ancora quello attivo
     att = _torneo_attivo(conn)
     if torneo_ref and att and att[0] == torneo_ref:
         iscritte = conn.execute(
             "SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_ref,)
         ).fetchone()[0]
-        completo += f"\n\n{_riga_posti(iscritte, conn)}"
+        completo += f"\n\n{_riga_posti(iscritte, conn, torneo_ref)}"
     if len(completo) > LIMITE_DIDASCALIA:
         return f"Troppo lungo: massimo {LIMITE_DIDASCALIA} caratteri di didascalia. Accorcialo."
     gruppo = _gruppo(conn)
