@@ -40,3 +40,5 @@ jobs:
         run: python test_comandi.py
       - name: Test pannello admin Tornei (Mini App)
         run: python test_pannello.py
+      - name: Test scheda Sfide (Mini App)
+        run: python test_sfide.py

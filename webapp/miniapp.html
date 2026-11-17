@@ -80,6 +80,17 @@ textarea.t{min-height:64px;resize:vertical}
 .ok-line{color:var(--ok);font-weight:600;font-size:13px;margin-top:6px}
 .prev-podio{white-space:pre-wrap}.prev-podio img{width:100%;border-radius:10px;margin-bottom:8px;display:block}
 .tap{cursor:pointer}
+/* scheda Sfide */
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.slot{border:1.5px dashed var(--line);background:none;border-radius:10px;padding:11px 6px;font:600 14px inherit;font-family:inherit;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot.on{border-style:solid;border-color:var(--teal);color:var(--tx);background:color-mix(in srgb,var(--teal) 10%,transparent)}
+.contro{text-align:center;font:400 20px/1 "Bebas",Impact,sans-serif;color:var(--acc);margin:8px 0;letter-spacing:.05em}
+.elenco{max-height:52vh;overflow:auto;margin-top:8px}
+.elenco button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:none;padding:12px 4px;font:500 15px inherit;font-family:inherit;color:var(--tx)}
+.elenco button.nuovo{color:var(--acc);font-weight:700}
+.sfida-r{display:grid;grid-template-columns:1fr auto 1fr auto;gap:6px;align-items:center}
+.sfida-r .x{font-weight:800;font-variant-numeric:tabular-nums;text-align:center;min-width:3.2em}
+.sfida-r .dx{text-align:right}
 .empty{text-align:center;color:var(--hint);padding:28px 10px}
 .podio{display:grid;gap:6px}
 .podio div{display:flex;gap:10px;align-items:center;font-weight:700;font-size:17px}
@@ -128,6 +139,7 @@ textarea.t{min-height:64px;resize:vertical}
   nav button{flex:0 1 200px}
   main{max-width:1280px;margin:0 auto;padding:16px 16px 0}
   main.v-tabellone{max-width:none}   /* il tabellone usa tutta la finestra */
+  main.v-sfide{max-width:640px}      /* sfide: modulo stretto, come su telefono */
   /* partite: card affiancate */
   main.v-partite section{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;align-items:start}
   main.v-partite section>:not(.card){grid-column:1/-1}
@@ -181,8 +193,9 @@ async function carica(forza){
     const d = await r.json();
     if (d.invariato) return;
     const primo = !S;
-    S = d; if (!foglioAperto && (tab !== "tornei" || primo)) render();
+    S = d; if (!foglioAperto && (!["tornei","sfide"].includes(tab) || primo)) render();
     if (primo && tab === "tornei") caricaPannello();
+    if (primo && tab === "sfide") caricaSfide();
   }catch(e){ /* rete assente: riprova al prossimo giro */ }
 }
 
@@ -279,6 +292,8 @@ function render(){
   if (admin()) schede.push(["admin","Gestione"]);
   if (admin()) { if (["nessuna","iscrizioni"].includes(S.fase)) schede.unshift(["tornei","Tornei"]); else schede.push(["tornei","Tornei"]); }
   if (!schede.length) schede.push(["attesa","Torneo"]);
+  // Sfide per tutti: prima scheda per i giocatori quando non c'è un torneo in corso
+  if (!["gironi","ko","finito"].includes(S.fase) && !admin()) schede.unshift(["sfide","Sfide"]); else schede.push(["sfide","Sfide"]);
   if (!tab || !schede.some(s=>s[0]===tab)) tab = schede[0][0];
   $("#prova").innerHTML = S.prova && veroAdmin()
     ? `<span>🧪 Torneo di prova — ${vistaGiocatore ? "vista giocatore" : "vista admin"}</span><button onclick="cambiaVista()">${vistaGiocatore ? "Torna admin" : "👤 Vista giocatore"}</button>${!vistaGiocatore && ["gironi","ko"].includes(S.fase) ? '<button onclick="simula()">🎲 Simula giro</button>' : ""}${!vistaGiocatore && S.fase === "gironi" ? '<button onclick="completaGironi()">⏩ Completa gironi</button>' : ""}`
@@ -287,7 +302,7 @@ function render(){
   $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
   const brkPrima = $("#brk"), scrollPrima = brkPrima ? brkPrima.scrollLeft : null;
   $("#main").className = "v-" + tab;
-  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa, tornei:vTornei})[tab]();
+  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa, tornei:vTornei, sfide:vSfide})[tab]();
   const brk = $("#brk");
   if (brk){
     if (scrollPrima !== null) brk.scrollLeft = scrollPrima;
@@ -297,7 +312,7 @@ function render(){
     }
   }
 }
-function vai(k){ tab = k; render(); window.scrollTo(0,0); if (k === "tornei") caricaPannello(); }
+function vai(k){ tab = k; render(); window.scrollTo(0,0); if (k === "tornei") caricaPannello(); if (k === "sfide") caricaSfide(); }
 
 function vAttesa(){
   const n = (S.iscritte || S.coppie || []).length;
@@ -813,6 +828,130 @@ async function podPubblica(){
   if (pod.url) URL.revokeObjectURL(pod.url);
   pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[]};
   await caricaPannello();
+}
+
+/* ---------- scheda Sfide (tutti i membri) ---------- */
+let SF = null, sfSub = "nuova", sfPag = 1, sfAnno = null, sfMed = "", sfB = {g:["","","",""], va:0, vb:0, data:"", scelte:{}};
+async function caricaSfide(){
+  try{
+    const q = new URLSearchParams({pagina: sfPag, anno: sfAnno || "", med: sfMed});
+    const r = await fetch("/api/sfide?" + q, {headers:{"X-Init-Data":INIT}});
+    const d = await r.json();
+    if (!r.ok){ toast(d.errore || "Errore", true); return; }
+    SF = d; sfPag = d.ultime.pagina; sfAnno = d.classifica.anno;
+    if (tab === "sfide" && !foglioAperto) render();
+  }catch(e){ toast("Connessione assente", true); }
+}
+async function sfPost(dati){
+  try{
+    const r = await fetch("/api/sfide", {method:"POST", headers:{"X-Init-Data":INIT,"Content-Type":"application/json"}, body:JSON.stringify(dati)});
+    return await r.json();
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+function vSfide(){
+  if (!SF) return '<div class="empty">Caricamento…</div>';
+  const h = `<section><div class="seg">${[["nuova","Nuova"],["ultime","Ultime"],["classifica","Classifica"],["medagliere","Medagliere"]].map(([k,n])=>`<button class="${sfSub===k?"on":""}" onclick="sfSub='${k}';render()">${n}</button>`).join("")}</div></section>`;
+  return h + ({nuova:vSfNuova, ultime:vSfUltime, classifica:vSfClassifica, medagliere:vSfMedagliere})[sfSub]();
+}
+const sfSlot = i => `<button class="slot ${sfB.g[i]?"on":""}" onclick="sfApriElenco(${i})">${sfB.g[i] ? esc(sfB.g[i]) : "+ Giocatore"}</button>`;
+function vSfNuova(){
+  const pronta = sfB.g.every(x=>x) && sfB.va + sfB.vb > 0;
+  const nA = sfB.g[0] && sfB.g[1] ? esc(sfB.g[0]+"-"+sfB.g[1]) : "Coppia A", nB = sfB.g[2] && sfB.g[3] ? esc(sfB.g[2]+"-"+sfB.g[3]) : "Coppia B";
+  const step = (k, v) => `<div class="step"><button onclick="sfB.${k}=Math.max(0,sfB.${k}-1);render()" ${v<=0?"disabled":""}>−</button><span>${v}</span><button onclick="sfB.${k}=Math.min(99,sfB.${k}+1);render()">+</button></div>`;
+  return `<section><h2>Giocatori</h2><div class="card">
+      <div class="vs">${sfSlot(0)}${sfSlot(1)}</div>
+      <div class="contro">contro</div>
+      <div class="vs">${sfSlot(2)}${sfSlot(3)}</div>
+    </div></section>
+    <section><h2>Partite vinte</h2><div class="card">
+      <div class="row"><span>${nA}</span>${step("va", sfB.va)}</div>
+      <div class="row"><span>${nB}</span>${step("vb", sfB.vb)}</div>
+      <div class="row"><span>Data</span><input type="date" class="t" style="width:auto" max="${SF.oggi}" value="${sfB.data || SF.oggi}" onchange="sfB.data = this.value === SF.oggi ? '' : this.value"></div>
+    </div>
+    <button class="b pri big" onclick="sfSalva()" ${pronta?"":"disabled"}>Salva sfida${pronta ? ` · ${sfB.va}-${sfB.vb}` : ""}</button>
+    <div class="actions"><button class="b" onclick="sfB.g=[sfB.g[2],sfB.g[3],sfB.g[0],sfB.g[1]];[sfB.va,sfB.vb]=[sfB.vb,sfB.va];render()">⇄ Scambia coppie</button><button class="b" onclick="sfB={g:['','','',''],va:0,vb:0,data:sfB.data,scelte:{}};render()">Svuota</button></div>
+    <p class="muted" style="margin:8px 6px">${SF.gruppo ? "La classifica aggiornata va in fondo al gruppo." : "⚠️ Nessun gruppo registrato: la classifica non andrà nel gruppo."} Dopo il salvataggio i giocatori restano: per la sfida dopo cambi solo il risultato.</p></section>`;
+}
+/* scelta giocatore da elenco */
+let sfI = 0;
+function sfApriElenco(i){
+  sfI = i;
+  apriFoglio(`<div style="font-weight:700;margin-bottom:8px">Giocatore ${i<2 ? "coppia A" : "coppia B"}</div>
+    <input class="t" id="sfQ" placeholder="Cerca o scrivi un nome" autocomplete="off" oninput="sfFiltra(this.value)">
+    <div class="elenco" id="sfEl"></div>
+    <div class="actions">${sfB.g[i] ? '<button class="b red" onclick="sfMetti(null)">Togli</button>' : ""}<button class="b" onclick="chiudiFoglio()">Annulla</button></div>`);
+  sfFiltra("");
+}
+function sfFiltra(q){
+  const t = q.trim().toLowerCase(), altri = sfB.g.filter((x,k)=>x && k!==sfI).map(x=>x.toLowerCase());
+  const lista = SF.giocatori.filter(g => !altri.includes(g.nome.toLowerCase()) && (!t || g.nome.toLowerCase().includes(t)));
+  const esatto = SF.giocatori.some(g => g.nome.toLowerCase() === t);
+  let h = lista.slice(0, 80).map(g=>`<button onclick="sfMetti(${jsq(g.nome)})">${esc(g.nome)}</button>`).join("");
+  if (t && !esatto) h += `<button class="nuovo" onclick="sfMetti(${jsq(q.trim())})">➕ Usa «${esc(q.trim())}»</button>`;
+  $("#sfEl").innerHTML = h || '<p class="muted">Nessun giocatore: scrivi il nome.</p>';
+}
+function sfMetti(nome){ sfB.g[sfI] = nome || ""; chiudiFoglio(); }
+/* salvataggio, con le domande sui nomi nuovi */
+async function sfSalva(){
+  const d = await sfPost({azione:"salva", a:[sfB.g[0],sfB.g[1]], b:[sfB.g[2],sfB.g[3]], va:sfB.va, vb:sfB.vb, data:sfB.data||null, scelte:sfB.scelte});
+  if (!d) return;
+  if (!d.ok && d.sconosciuti){ sfChiedi(d.sconosciuti, 0); return; }
+  if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return; }
+  vibra("success"); toast(d.testo);
+  if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);
+  sfB.va = 0; sfB.vb = 0; sfB.scelte = {}; if (d.nomi) sfB.g = d.nomi;
+  await caricaSfide();
+}
+function sfChiedi(lista, k){
+  if (k >= lista.length){ chiudiFoglio(); sfSalva(); return; }
+  const u = lista[k], chiave = jsq(u.nome.toLowerCase());
+  sfCoda = lista; sfK = k;
+  const altri = SF.giocatori.filter(g => !u.simili.some(s=>s.id===g.id));
+  apriFoglio(`<div style="font-weight:700;margin-bottom:4px">«${esc(u.nome)}» non è in elenco</div>
+    <p class="muted" style="margin:0 0 8px">È il soprannome di un giocatore che c'è già, o è una persona nuova?</p>
+    <div class="elenco">${u.simili.map(s=>`<button onclick="sfScelta(${chiave}, ${s.id})">È <b>${esc(s.nome)}</b></button>`).join("")}
+      ${altri.length ? `<div style="padding:10px 4px"><select style="width:100%" onchange="if(this.value) sfScelta(${chiave}, +this.value)"><option value="">${u.simili.length ? "È un altro…" : "È il soprannome di…"}</option>${altri.map(g=>`<option value="${g.id}">${esc(g.nome)}</option>`).join("")}</select></div>` : ""}
+      <button class="nuovo" onclick="sfScelta(${chiave}, 'nuovo')">➕ No, è un giocatore nuovo: «${esc(u.nome)}»</button></div>
+    <div class="actions"><button class="b" onclick="chiudiFoglio()">Annulla</button></div>
+    <p class="muted">Un soprannome vale per sempre: le sfide di «${esc(u.nome)}» andranno a quel giocatore. Gli admin ricevono un avviso.</p>`);
+}
+let sfCoda = [], sfK = 0;
+function sfScelta(chiave, valore){ sfB.scelte[chiave] = valore; sfChiedi(sfCoda, sfK + 1); }
+/* ultime sfide, classifica, medagliere */
+function vSfUltime(){
+  const u = SF.ultime;
+  if (!u.totale) return '<div class="empty">Nessuna sfida registrata.</div>';
+  let h = `<section><h2>Ultime sfide — pagina ${u.pagina}/${u.pagine} (${u.totale})</h2>${u.sfide.map(s=>{
+    const wa = s.va > s.vb, wb = s.vb > s.va, puo = SF.admin || s.da === SF.uid;
+    return `<div class="card"><div class="muted" style="display:flex;justify-content:space-between"><span>n° ${s.id} · ${s.data.slice(8,10)}/${s.data.slice(5,7)}/${s.data.slice(0,4)}</span>${puo ? `<button class="b red" style="padding:2px 8px" onclick="sfAnnulla(${s.id})">🗑</button>` : ""}</div>
+      <div class="sfida-r" style="margin-top:4px"><span class="team ${wa?"win":wb?"lose":""}">${esc(s.a.join("-"))}</span><span class="x">${s.va}-${s.vb}</span><span class="team dx ${wb?"win":wa?"lose":""}">${esc(s.b.join("-"))}</span></div></div>`;
+  }).join("")}`;
+  if (u.pagine > 1) h += `<div class="actions"><button class="b" onclick="sfPag--;caricaSfide()" ${u.pagina<=1?"disabled":""}>‹ Più recenti</button><button class="b" onclick="sfPag++;caricaSfide()" ${u.pagina>=u.pagine?"disabled":""}>Più vecchie ›</button></div>`;
+  return h + "</section>";
+}
+async function sfAnnulla(id){
+  if (!await chiedi(`Annullare la sfida n° ${id}?\nLa classifica aggiornata va nel gruppo.`)) return;
+  const d = await sfPost({azione:"annulla", id});
+  if (!d) return;
+  if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return; }
+  vibra("success"); toast(d.testo); if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);
+  await caricaSfide();
+}
+function vSfClassifica(){
+  const c = SF.classifica, med = ["🥇","🥈","🥉"];
+  const sel = `<select onchange="sfAnno=+this.value;caricaSfide()">${SF.anni.map(a=>`<option ${a===c.anno?"selected":""}>${a}</option>`).join("")}</select>`;
+  if (!c.righe.length) return `<section><h2>Classifica sfidine ${sel}</h2><div class="empty">Nessuna sfida nel ${c.anno}.</div></section>`;
+  return `<section><h2>Classifica sfidine ${sel}</h2><div class="card"><table><tr><th>#</th><th>Giocatore</th><th>Elo</th><th>G</th><th>V</th><th>%</th></tr>
+    ${c.righe.map((r,i)=>`<tr><td>${med[i] || i+1}</td><td>${esc(r.nome)}</td><td><b>${r.elo}</b></td><td>${r.g}</td><td>${r.v}</td><td>${r.perc}</td></tr>`).join("")}</table></div>
+    <p class="muted" style="margin:0 6px">G = partite giocate · V = vinte · l'Elo parte da 1000 a inizio anno</p></section>`;
+}
+function vSfMedagliere(){
+  const m = SF.medagliere, val = m.anno === null ? "sempre" : String(m.anno);
+  const sel = `<select onchange="sfMed=this.value;caricaSfide()">${SF.anni.map(a=>`<option value="${a}" ${String(a)===val?"selected":""}>${a}</option>`).join("")}<option value="sempre" ${val==="sempre"?"selected":""}>Di sempre</option></select>`;
+  if (!m.righe.length) return `<section><h2>Medagliere ${sel}</h2><div class="empty">Nessun podio registrato.</div></section>`;
+  return `<section><h2>Medagliere ${sel}</h2><div class="card"><table><tr><th>#</th><th>Giocatore</th><th>🥇</th><th>🥈</th><th>🥉</th></tr>
+    ${m.righe.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.nome)}</td><td><b>${r.m[0]}</b></td><td>${r.m[1]}</td><td>${r.m[2]}</td></tr>`).join("")}</table></div>
+    <p class="muted" style="margin:0 6px">Tornei conteggiati: ${m.contati} (esclusi i 5X)</p></section>`;
 }
 
 carica(true);

@@ -35,6 +35,7 @@ MEDAGLIERE (tornei, per giocatore, ordine olimpico: ori > argenti > bronzi)
 
 from __future__ import annotations
 
+import difflib
 import re
 from datetime import date, datetime
 from html import escape
@@ -144,6 +145,46 @@ def nome_canonico(conn, nome: str) -> str:
     return row[1] if row else pulisci_nome(nome)
 
 
+def giocatori_per_uso(conn) -> list[dict]:
+    """Anagrafica per la scelta da elenco: prima chi ha giocato più di recente,
+    poi gli altri in ordine alfabetico."""
+    rows = conn.execute("""
+        SELECT g.id, g.nome,
+          (SELECT MAX(s.id) FROM sfide s WHERE s.annullata = 0 AND g.id IN (s.a1, s.a2, s.b1, s.b2))
+        FROM giocatori g
+    """).fetchall()
+    rows.sort(key=lambda r: (r[2] is None, -(r[2] or 0), r[1].lower()))
+    return [{"id": gid, "nome": nome} for gid, nome, _ in rows]
+
+
+def nomi_simili(conn, nome: str, quanti: int = 4) -> list[dict]:
+    """Giocatori con un nome simile (per «è un soprannome di…?»)."""
+    chiave = pulisci_nome(nome).lower()
+    punti = {}
+    for a, gid, gnome in conn.execute(
+            "SELECT a.alias, g.id, g.nome FROM giocatori_alias a JOIN giocatori g ON g.id = a.giocatore_id"):
+        r = difflib.SequenceMatcher(None, chiave, a).ratio()
+        if a.startswith(chiave) or chiave.startswith(a):
+            r = max(r, 0.8)
+        if r >= 0.5 and r > punti.get(gid, (0, ""))[0]:
+            punti[gid] = (r, gnome)
+    migliori = sorted(punti.items(), key=lambda kv: (-kv[1][0], kv[1][1].lower()))[:quanti]
+    return [{"id": gid, "nome": gnome} for gid, (_, gnome) in migliori]
+
+
+def aggiungi_soprannome(conn, soprannome: str, giocatore_id: int) -> str | None:
+    """Collega un nome nuovo a un giocatore esistente. Ritorna un errore o None (senza commit)."""
+    chiave = pulisci_nome(soprannome).lower()
+    if not chiave:
+        return "Soprannome vuoto."
+    if cerca_giocatore(conn, chiave):
+        return f"«{soprannome}» è già in anagrafica."
+    if not conn.execute("SELECT 1 FROM giocatori WHERE id = ?", (giocatore_id,)).fetchone():
+        return "Giocatore non trovato."
+    conn.execute("INSERT INTO giocatori_alias (alias, giocatore_id) VALUES (?, ?)", (chiave, giocatore_id))
+    return None
+
+
 def dividi_coppia(testo: str):
     """'Luca-Matteo' -> ['Luca', 'Matteo'] (separatori - / & +, o 'e')."""
     parti = [p for p in re.split(r"\s*[-/&+]\s*|\s+(?:e|ed)\s+", testo.strip(), flags=re.I) if p.strip()]
@@ -201,6 +242,71 @@ def leggi_riga(riga: str):
     if va + vb == 0:
         return "risultato 0-0: nessuna partita"
     return a, b, va, vb
+
+
+# ======================= SFIDE: SALVA E ANNULLA (senza Telegram) =======================
+# Una sola logica, due ingressi: /sfida e /annullasfida, e la scheda «Sfide» della Mini App.
+
+def salva_sfide(conn, lette, data_sfide: date, user_id) -> tuple[list[int], list[str]]:
+    """lette = [((n1, n2), (n3, n4), vinte_a, vinte_b), ...] già controllate.
+    Crea i giocatori mancanti e salva tutto. Ritorna (numeri sfide, nomi nuovi)."""
+    nuovi, numeri = [], []
+    for a, b, va, vb in lette:
+        ids = []
+        for n in list(a) + list(b):
+            gid, nome, nuovo = trova_o_crea(conn, n)
+            ids.append(gid)
+            if nuovo:
+                nuovi.append(nome)
+        cur = conn.execute(
+            "INSERT INTO sfide (data, a1, a2, b1, b2, vinte_a, vinte_b, inserita_da, inserita_il) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (data_sfide.isoformat(), *ids, va, vb, user_id, datetime.now().isoformat()),
+        )
+        numeri.append(cur.lastrowid)
+    conn.commit()
+    return numeri, nuovi
+
+
+def intestazione_sfide(numeri: list[int], nuovi: list[str], data_sfide: date, oggi: date) -> str:
+    quando = "oggi" if data_sfide == oggi else data_sfide.strftime("%d/%m/%Y")
+    n = len(numeri)
+    intest = (f"✅ {'Registrata 1 sfida' if n == 1 else f'Registrate {n} sfide'} ({quando}): "
+              + ", ".join(f"n° {x}" for x in numeri))
+    if nuovi:
+        intest += "\n🆕 Nuovi giocatori: " + ", ".join(nuovi) + " (se è un errore di battitura, avvisa un admin)"
+    return intest
+
+
+def annulla_sfida(conn, sid: int, user_id: int, admin: bool):
+    """Ritorna (ok, testo, anno della sfida)."""
+    row = conn.execute("SELECT inserita_da, annullata, data FROM sfide WHERE id = ?", (sid,)).fetchone()
+    if not row or row[1]:
+        return False, f"Sfida n° {sid} non trovata o già annullata.", None
+    if row[0] != user_id and not admin:
+        return False, "Puoi annullare solo le sfide inserite da te (o chiedi a un admin).", None
+    conn.execute("UPDATE sfide SET annullata = 1 WHERE id = ?", (sid,))
+    conn.commit()
+    return True, f"🗑️ Sfida n° {sid} annullata.", int(row[2][:4])
+
+
+def pagina_sfide(conn, pagina: int = 1, per_pagina: int = 20) -> dict:
+    nomi = dict(conn.execute("SELECT id, nome FROM giocatori").fetchall())
+    totale = conn.execute("SELECT COUNT(*) FROM sfide WHERE annullata = 0").fetchone()[0]
+    pagine = max(1, -(-totale // per_pagina))
+    pagina = min(max(1, pagina), pagine)
+    rows = conn.execute(
+        "SELECT id, data, a1, a2, b1, b2, vinte_a, vinte_b, inserita_da FROM sfide WHERE annullata = 0 "
+        "ORDER BY id DESC LIMIT ? OFFSET ?", (per_pagina, (pagina - 1) * per_pagina)).fetchall()
+    return {"pagina": pagina, "pagine": pagine, "totale": totale,
+            "sfide": [{"id": sid, "data": d, "a": [nomi[a1], nomi[a2]], "b": [nomi[b1], nomi[b2]],
+                       "va": va, "vb": vb, "da": da} for sid, d, a1, a2, b1, b2, va, vb, da in rows]}
+
+
+def anni_con_dati(conn) -> list[int]:
+    anni = {int(r[0]) for r in conn.execute("SELECT DISTINCT substr(data, 1, 4) FROM sfide WHERE annullata = 0")}
+    anni.add(_oggi().year)
+    return sorted(anni, reverse=True)
 
 
 # ======================= ELO E CLASSIFICA =======================
@@ -416,28 +522,8 @@ async def sfida(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         + "\n• ".join(errori) + "\n\n" + ESEMPIO_SFIDA)
         return
 
-    nuovi, numeri = [], []
-    for a, b, va, vb in lette:
-        ids = []
-        for n in a + b:
-            gid, nome, nuovo = trova_o_crea(conn, n)
-            ids.append(gid)
-            if nuovo:
-                nuovi.append(nome)
-        cur = conn.execute(
-            "INSERT INTO sfide (data, a1, a2, b1, b2, vinte_a, vinte_b, inserita_da, inserita_il) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (data_sfide.isoformat(), *ids, va, vb, update.effective_user.id, datetime.now().isoformat()),
-        )
-        numeri.append(cur.lastrowid)
-    conn.commit()
-
-    quando = "oggi" if data_sfide == oggi else data_sfide.strftime("%d/%m/%Y")
-    n = len(numeri)
-    intest = (f"✅ {'Registrata 1 sfida' if n == 1 else f'Registrate {n} sfide'} ({quando}): "
-              + ", ".join(f"n° {x}" for x in numeri))
-    if nuovi:
-        intest += "\n🆕 Nuovi giocatori: " + ", ".join(nuovi) + " (se è un errore di battitura, avvisa un admin)"
+    numeri, nuovi = salva_sfide(conn, lette, data_sfide, update.effective_user.id)
+    intest = intestazione_sfide(numeri, nuovi, data_sfide, oggi)
     testo_cl = testo_classifica(conn, data_sfide.year)
     await _mostra(update, context, conn, "classifica_msg", escape(intest) + "\n\n" + testo_cl)
 
@@ -467,18 +553,11 @@ async def annullasfida(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _rispondi(update, context, "Uso: /annullasfida N (il numero lo trovi in /sfide)")
         return
     sid = int(context.args[0].lstrip("n°"))
-    row = conn.execute("SELECT inserita_da, annullata, data FROM sfide WHERE id = ?", (sid,)).fetchone()
-    if not row or row[1]:
-        await _rispondi(update, context, f"Sfida n° {sid} non trovata o già annullata.")
+    ok, testo, anno = annulla_sfida(conn, sid, update.effective_user.id, _is_admin(update.effective_user.id))
+    if not ok:
+        await _rispondi(update, context, testo)
         return
-    if row[0] != update.effective_user.id and not _is_admin(update.effective_user.id):
-        await _rispondi(update, context, "Puoi annullare solo le sfide inserite da te (o chiedi a un admin).")
-        return
-    conn.execute("UPDATE sfide SET annullata = 1 WHERE id = ?", (sid,))
-    conn.commit()
-    anno = int(row[2][:4])
-    await _mostra(update, context, conn, "classifica_msg",
-                  f"🗑️ Sfida n° {sid} annullata.\n\n" + testo_classifica(conn, anno))
+    await _mostra(update, context, conn, "classifica_msg", f"{testo}\n\n" + testo_classifica(conn, anno))
 
 
 def _anno_da_args(args, default: int):
@@ -594,6 +673,30 @@ async def unisci(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _rispondi(update, context, f"🔗 «{nomi[0]}» unito a «{giusto[1]}».")
 
 
+async def toglisoprannome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Annulla un soprannome sbagliato (es. aggiunto dalla Mini App). Le sfide già
+    salvate restano al giocatore: se erano di un altro, vanno annullate e rifatte."""
+    if not _is_admin(update.effective_user.id):
+        await _rispondi(update, context, "Comando riservato agli admin.")
+        return
+    conn = _conn()
+    alias = pulisci_nome(" ".join(context.args or [])).lower()
+    if not alias:
+        await _rispondi(update, context, "Uso: /toglisoprannome Soprannome")
+        return
+    g = cerca_giocatore(conn, alias)
+    if not g:
+        await _rispondi(update, context, f"Soprannome «{alias}» non trovato.")
+        return
+    if g[1].lower() == alias:
+        await _rispondi(update, context, f"«{g[1]}» è il nome principale, non un soprannome: usa /rinominagiocatore.")
+        return
+    conn.execute("DELETE FROM giocatori_alias WHERE alias = ?", (alias,))
+    conn.commit()
+    await _rispondi(update, context, f"✂️ «{alias}» non è più un soprannome di «{g[1]}». "
+                    "Le sfide già salvate restano a lui: se erano di un altro, annullale e rifalle.")
+
+
 async def _imposta_esclusione(update, context, valore: int):
     if not _is_admin(update.effective_user.id):
         await _rispondi(update, context, "Comando riservato agli admin.")
@@ -630,6 +733,7 @@ COMANDI_STATISTICHE = [
     ("giocatori", "Elenco giocatori registrati"),
     ("rinominagiocatore", "[admin] Corregge il nome di un giocatore — /rinominagiocatore Vecchio | Nuovo"),
     ("unisci", "[admin] Fonde un doppione nel giocatore giusto — /unisci Marchino | Marco"),
+    ("toglisoprannome", "[admin] Toglie un soprannome sbagliato — /toglisoprannome Gio"),
     ("escluditorneo", "[admin] Esclude un torneo dal medagliere — /escluditorneo NomeTorneo"),
     ("includitorneo", "[admin] Include un torneo nel medagliere (annulla l'esclusione automatica 5X)"),
 ]
@@ -642,7 +746,7 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando):
     for nome, funz in (
         ("sfida", sfida), ("sfide", sfide), ("annullasfida", annullasfida),
         ("classifica", classifica), ("medagliere", medagliere), ("giocatori", giocatori),
-        ("rinominagiocatore", rinominagiocatore), ("unisci", unisci),
+        ("rinominagiocatore", rinominagiocatore), ("unisci", unisci), ("toglisoprannome", toglisoprannome),
         ("escluditorneo", escluditorneo), ("includitorneo", includitorneo),
     ):
         app.add_handler(CommandHandler(nome, funz))
