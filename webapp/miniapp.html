@@ -699,9 +699,9 @@ async function pAz(dati, chiudi){
 const datalistGiocatori = () => `<datalist id="dlG">${(P.giocatori||[]).map(g=>`<option value="${esc(g)}">`).join("")}</datalist>`;
 function vTornei(){
   if (!P) return '<div class="empty">Caricamento…</div>';
-  let h = `<section><div class="seg">${[["attivo","Torneo attivo"],["storico","Storico"],["podio","Podio"]].map(([k,n])=>`<button class="${pSub===k?"on":""}" onclick="pSub='${k}';render()">${n}</button>`).join("")}</div></section>`;
+  let h = `<section><div class="seg">${[["attivo","Attivo"],["storico","Storico"],["podio","Podio"],["locandina","Locandina"]].map(([k,n])=>`<button class="${pSub===k?"on":""}" onclick="pSub='${k}';render();if(pSub==='locandina')caricaLocandina()">${n}</button>`).join("")}</div></section>`;
   h += datalistGiocatori();
-  return h + ({attivo:vPAttivo, storico:vPStorico, podio:vPPodio})[pSub]();
+  return h + ({attivo:vPAttivo, storico:vPStorico, podio:vPPodio, locandina:vPLocandina})[pSub]();
 }
 function vPAttivo(){
   const a = P.attivo, n = a.squadre.length, L = P.limiti;
@@ -720,6 +720,152 @@ function vPAttivo(){
   h += `<section><h2>Coppie iscritte (${n})</h2><div class="card">${a.squadre.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c)}</span><span style="display:flex;gap:6px"><button class="b" onclick="pApriRinomina(${i+1})">✏️</button><button class="b red" onclick="pRimuovi(${jsq(c)})">🗑</button></span></div>`).join("") || '<span class="muted">Nessuna coppia</span>'}</div>
     <button class="b big" onclick="pAz({azione:'esporta'})" ${n?"":"disabled"}>📄 Elenco in Word nella chat col bot</button></section>`;
   return h;
+}
+/* locandina (fase 3): stessa logica di /locandina, copia dell'anteprima anche in chat col bot */
+let LC = null, lcB = null, lcBz = null, lcImg = null, lcStale = false, lcQuando = "", lc48 = false, lcTestoPub = null;
+const LC_FORMULE = {rollerball:"Rollerball", volo:"Volo", tradizionale:"Tradizionale"};
+function lcNuovoModulo(){
+  const p = LC.predefiniti;
+  lcB = {data:p.data, formule:[], cinque_x:false, ora:p.ora, quota:p.quota, premi:p.premi, max:null, extra:"", nuovo_torneo:true, ripeti:true};
+}
+async function caricaLocandina(){
+  try{
+    const r = await fetch("/api/pannello/locandina", {headers:{"X-Init-Data":INIT}});
+    const d = await r.json();
+    if (!r.ok){ toast(d.errore || "Errore", true); return; }
+    LC = d;
+    if (!lcB) lcNuovoModulo();
+    if (lcBz && !(d.bozza && d.bozza.id === lcBz.id)) lcChiudiBozza();   // pubblicata o annullata dalla chat
+    if (d.bozza && !lcBz) { lcBz = d.bozza; lcB.extra = d.bozza.extra; lcB.nuovo_torneo = d.bozza.nuovo_torneo; lcB.ripeti = d.bozza.ripeti; lcCaricaImg(d.bozza.id); }
+    if (d.ultima && lcTestoPub === null) lcTestoPub = d.ultima.extra;
+    if (tab === "tornei" && pSub === "locandina" && !foglioAperto) render();
+  }catch(e){ toast("Connessione assente", true); }
+}
+async function lcCaricaImg(id){
+  try{
+    const r = await fetch("/api/pannello/locandina/img?id=" + id, {headers:{"X-Init-Data":INIT}});
+    if (!r.ok) return;
+    if (lcImg && lcImg.startsWith("blob:")) URL.revokeObjectURL(lcImg);
+    lcImg = URL.createObjectURL(await r.blob());
+    if (tab === "tornei" && pSub === "locandina" && !foglioAperto) render();
+  }catch(e){}
+}
+async function lcAz(dati, conferma){
+  if (conferma && !await chiedi(conferma)) return null;
+  try{
+    const r = await fetch("/api/pannello/locandina", {method:"POST", headers:{"X-Init-Data":INIT,"Content-Type":"application/json"}, body:JSON.stringify(dati)});
+    const d = await r.json();
+    if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return null; }
+    vibra("success");
+    if (d.testo) toast(d.testo.split("\n")[0]);
+    return d;
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+function lcCambio(){ if (lcBz) { lcStale = true; render(); } }
+function lcSi(campo, v){
+  return `<div class="seg" style="width:150px"><button class="${v?"on":""}" onclick="lcFlag('${campo}',true)">Sì</button><button class="${v?"":"on"}" onclick="lcFlag('${campo}',false)">No</button></div>`;
+}
+async function lcFlag(campo, v){
+  lcB[campo] = v;
+  if (campo === "cinque_x") { lcCambio(); render(); return; }
+  if (lcBz) { const d = await lcAz({azione:campo, id:lcBz.id, valore:v}); if (d) lcBz = d.bozza; else lcB[campo] = !v; }
+  render();
+}
+function lcFormula(k){
+  const i = lcB.formule.indexOf(k);
+  if (i >= 0) lcB.formule.splice(i, 1); else lcB.formule.push(k);
+  lcCambio(); render();
+}
+function lcMax(delta){
+  const L = LC.limiti, base = lcB.max ?? LC.predefiniti.max;
+  lcB.max = Math.min(L.max, Math.max(L.min, base + delta));
+  lcCambio(); render();
+}
+function vPLocandina(){
+  if (!LC || !lcB) return '<div class="empty">Caricamento…</div>';
+  const b = lcB, maxV = b.max ?? LC.predefiniti.max;
+  let h = `<section><h2>${lcBz ? "Modifica locandina" : "Nuova locandina"}</h2><div class="card">
+    <div class="row"><span>Data</span><input type="date" class="t" style="width:auto" min="${LC.predefiniti.oggi}" value="${esc(b.data)}" oninput="lcB.data=this.value" onchange="lcCambio()"></div>
+    <div class="campo"><label>Formula (anche più di una)</label><div class="seg">${LC.formule.map(k=>`<button class="${b.formule.includes(k)?"on":""}" onclick="lcFormula('${k}')">${LC_FORMULE[k]}</button>`).join("")}</div></div>
+    <div class="row"><span>Modalità 5X</span>${lcSi("cinque_x", b.cinque_x)}</div>
+    <div class="row"><span>Ora</span><input type="time" class="t" style="width:auto" value="${esc(b.ora)}" oninput="lcB.ora=this.value" onchange="lcCambio()"></div>
+    <div class="row"><span>Quota a coppia</span><input class="t" style="width:110px" value="${esc(b.quota)}" oninput="lcB.quota=this.value" onchange="lcCambio()"></div>
+    <div class="row"><span>Premi</span><input class="t" style="width:150px" value="${esc(b.premi)}" oninput="lcB.premi=this.value" onchange="lcCambio()"></div>
+    <div class="row"><span>Massimo coppie${b.max===null?' <span class="muted">(predefinito)</span>':""}</span><div class="step"><button onclick="lcMax(-1)" ${maxV<=LC.limiti.min?"disabled":""}>−</button><span>${maxV}</span><button onclick="lcMax(1)" ${maxV>=LC.limiti.max?"disabled":""}>+</button></div></div>
+    <div class="row"><span>Nuovo torneo</span>${lcSi("nuovo_torneo", b.nuovo_torneo)}</div>
+    <div class="row"><span>Ripeti ogni 48h</span>${lcSi("ripeti", b.ripeti)}</div>
+    <div class="campo"><label>Testo aggiunto sotto la didascalia (facoltativo)</label><textarea class="t" oninput="lcB.extra=this.value">${esc(b.extra)}</textarea>
+    ${lcBz ? `<button class="b" style="margin-top:6px" onclick="lcSalvaTesto()">💾 Salva testo</button>` : ""}</div>
+  </div><button class="b ${lcBz && !lcStale ? "" : "pri "}big" onclick="lcAnteprima()">👁 ${lcBz ? "Rifai anteprima" : "Anteprima"}</button>
+  ${LC.gruppo ? "" : '<p class="muted" style="margin:6px">⚠️ Nessun gruppo registrato: scrivi /registragruppo nel gruppo.</p>'}</section>`;
+  if (lcBz) {
+    h += `<section><h2>Anteprima n° ${lcBz.id}${lcBz.stato==="programmata" ? " · ⏰ " + esc(lcBz.quando) : ""}</h2><div class="card prev-podio">${lcImg ? `<img src="${lcImg}">` : ""}${esc(lcBz.caption)}</div>
+      ${lcStale ? '<p class="muted" style="margin:0 6px 8px">⚠️ Hai cambiato i dati dell\'immagine: rifai l\'anteprima prima di pubblicare.</p>' : '<p class="muted" style="margin:0 6px 8px">Copia con i bottoni anche nella chat col bot.</p>'}
+      <button class="b pri big" onclick="lcPubblica()" ${lcStale || !LC.gruppo ? "disabled" : ""}>📢 Pubblica ora</button>
+      <div class="card" style="margin-top:8px"><div class="row"><span>Pubblica il</span><input type="datetime-local" class="t" style="width:auto" value="${esc(lcQuando)}" oninput="lcQuando=this.value"></div>
+      <button class="b big" onclick="lcProgramma()" ${lcStale ? "disabled" : ""}>⏰ Programma</button></div>
+      <button class="b red big" style="margin-top:8px" onclick="lcAnnullaBozza()">❌ Annulla locandina</button></section>`;
+  }
+  const altre = LC.programmate.filter(p => !lcBz || p.id !== lcBz.id);
+  if (altre.length) h += `<section><h2>Programmate</h2><div class="card">${altre.map(p=>`<div class="row"><span><b>n° ${p.id}</b> ${esc(p.nome||"")}<br><span class="muted">esce il ${esc(p.quando)}</span></span><button class="b red" onclick="lcAnnulla(${p.id})">Annulla</button></div>`).join("")}</div></section>`;
+  const u = LC.ultima;
+  if (u) {
+    h += `<section><h2>Ultima pubblicata · n° ${u.id} ${esc(u.nome||"")}</h2><div class="card">
+      <div class="row"><span>${u.ripeti ? "🔁 Prossima ripubblicazione " + esc(u.prossimo) : '<span class="muted">Nessuna ripubblicazione attiva</span>'}</span>${u.ripeti ? `<button class="b" onclick="lcFerma(${u.id})">Ferma</button>` : ""}</div>
+      <div class="row"><span>Riparti con giro ogni 48h</span><div class="seg" style="width:150px"><button class="${lc48?"on":""}" onclick="lc48=true;render()">Sì</button><button class="${lc48?"":"on"}" onclick="lc48=false;render()">No</button></div></div>
+      <button class="b big" onclick="lcRipubblica(${u.id})" ${LC.gruppo?"":"disabled"}>🔄 Ripubblica ora${u.del_torneo_attivo ? " (con iscritte e lista)" : ""}</button>
+      <div class="campo" style="margin-top:8px"><label>Testo aggiunto nel post del gruppo</label><textarea class="t" oninput="lcTestoPub=this.value">${esc(lcTestoPub ?? u.extra)}</textarea>
+      <button class="b" style="margin-top:6px" onclick="lcDidascalia(${u.id})">✏️ Aggiorna didascalia nel gruppo</button></div>
+    </div></section>`;
+  }
+  return h;
+}
+function lcDatiModulo(){ return {...lcB, max: lcB.max}; }
+async function lcAnteprima(){
+  if (!lcB.formule.length) { toast("Scegli almeno una formula", true); return; }
+  toast("Preparo l'anteprima…");
+  const d = await lcAz({azione:"anteprima", ...lcDatiModulo(), sostituisce: lcBz ? lcBz.id : null});
+  if (!d) return;
+  lcBz = d.bozza; lcStale = false;
+  if (lcImg && lcImg.startsWith("blob:")) URL.revokeObjectURL(lcImg);
+  lcImg = d.img;
+  render(); setTimeout(()=>window.scrollTo(0, document.body.scrollHeight), 50);
+}
+async function lcSalvaTesto(){
+  const d = await lcAz({azione:"testo", id:lcBz.id, testo:lcB.extra});
+  if (d) { lcBz = d.bozza; render(); }
+}
+function lcChiudiBozza(){
+  lcBz = null; lcStale = false; lcQuando = "";
+  if (lcImg && lcImg.startsWith("blob:")) URL.revokeObjectURL(lcImg);
+  lcImg = null; lcNuovoModulo();
+}
+async function lcPubblica(){
+  const d = await lcAz({azione:"pubblica", id:lcBz.id}, `Pubblicare ora la locandina n° ${lcBz.id} nel gruppo?` + (lcB.nuovo_torneo ? "\nApre anche il torneo nuovo." : ""));
+  if (!d) return;
+  if (d.testo.includes("\n")) setTimeout(()=>toast(d.testo.split("\n").slice(1).join(" "), false), 2700);
+  lcChiudiBozza(); lcTestoPub = null; await caricaLocandina(); caricaPannello();
+}
+async function lcProgramma(){
+  if (!lcQuando) { toast("Scegli giorno e ora", true); return; }
+  const d = await lcAz({azione:"programma", id:lcBz.id, quando:lcQuando});
+  if (!d) return;
+  lcChiudiBozza(); await caricaLocandina();
+}
+async function lcAnnullaBozza(){
+  const d = await lcAz({azione:"annulla", id:lcBz.id}, `Annullare la locandina n° ${lcBz.id}?`);
+  if (!d) return;
+  lcChiudiBozza(); await caricaLocandina();
+}
+async function lcAnnulla(id){ if (await lcAz({azione:"annulla", id}, `Annullare la locandina programmata n° ${id}?`)) caricaLocandina(); }
+async function lcFerma(id){ if (await lcAz({azione:"ferma", id}, "Fermare le ripubblicazioni ogni 48h? L'ultimo post resta nel gruppo.")) caricaLocandina(); }
+async function lcRipubblica(id){
+  const d = await lcAz({azione:"ripubblica", id, con_48h:lc48}, "Ripubblicare ora la locandina nel gruppo? Il post precedente viene tolto.");
+  if (d) { lc48 = false; caricaLocandina(); }
+}
+async function lcDidascalia(id){
+  const d = await lcAz({azione:"testo", id, testo:lcTestoPub ?? ""}, "Modificare la didascalia del post nel gruppo?");
+  if (d) caricaLocandina();
 }
 async function pIscrivi(){
   if (!pB.g1.trim() || !pB.g2.trim()) { toast("Scrivi entrambi i giocatori", true); return; }

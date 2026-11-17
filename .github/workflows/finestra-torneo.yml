@@ -42,3 +42,5 @@ jobs:
         run: python test_pannello.py
       - name: Test scheda Sfide (Mini App)
         run: python test_sfide.py
+      - name: Test pannello Locandina (Mini App)
+        run: python test_locandina_app.py
