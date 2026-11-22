@@ -74,6 +74,23 @@ async def main():
     assert [(c["nome"], c["mia"]) for c in s["squadre"]] == [("Luca-Matteo", True), ("Paolo-Gianni", False)]
     assert "Gianni" in s["giocatori"]
 
+    # modifica: cambia compagno tenendo il posto; solo la propria coppia; stessi controlli
+    n_prima = bot.n
+    r = await az(azione="modifica", nome="Luca-Matteo", g1="Luca", g2="Giovanni")
+    assert r["ok"] and "Luca-Matteo → Luca-Giovanni" in r["testo"], r
+    assert [c["nome"] for c in (await stato())["squadre"]] == ["Luca-Giovanni", "Paolo-Gianni"]
+    assert bot.n > n_prima and "Dalla app" in bot.inviati[-1][2]
+    r = await az(azione="modifica", nome="Paolo-Gianni", g1="Paolo", g2="Ugo")
+    assert not r["ok"] and "solo la tua" in r["errore"], r
+    r = await az(azione="modifica", nome="Luca-Giovanni", g1="Luca", g2="Gianni")   # Gianni è in Paolo-Gianni
+    assert not r["ok"] and "Gianni è già iscritto in Paolo-Gianni" in r["errore"], r
+    set_iscrizioni(conn, False)
+    r = await az(azione="modifica", nome="Luca-Giovanni", g1="Luca", g2="Matteo")
+    assert not r["ok"] and "chiuse" in r["errore"], r
+    set_iscrizioni(conn, True)
+    r = await az(azione="modifica", nome="Luca-Giovanni", g1="Luca", g2="Matteo")
+    assert r["ok"], r
+
     # ritiro: solo le proprie
     r = await az(azione="ritira", nome="Paolo-Gianni")
     assert not r["ok"], r

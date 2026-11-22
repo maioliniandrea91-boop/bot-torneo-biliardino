@@ -11,6 +11,7 @@ API (autenticazione Telegram come il resto della Mini App):
   GET  /api/iscrizione
   POST /api/iscrizione {"azione": "iscrivi", "g1": "...", "g2": "..."}
                        {"azione": "ritira", "nome": "Nome1-Nome2"}
+                       {"azione": "modifica", "nome": "Nome1-Nome2", "g1": "...", "g2": "..."}
 Dopo iscrivi e ritira la lista nuova va in fondo al gruppo (la vecchia sparisce).
 """
 from __future__ import annotations
@@ -97,6 +98,25 @@ async def h_azione(req):
         nuovi = [g for g in (g1, g2) if not ST.cerca_giocatore(conn, g)]
         esito = L.iscrivi_coppia(conn, uid, u.get("username") or u.get("first_name"), coppia,
                                  bool(_is_admin(uid)))
+    elif az == "modifica":
+        # cambia compagno senza perdere il posto in lista: solo la propria coppia (admin tutte)
+        vecchio = str(d.get("nome", "")).strip()
+        tid, _ = get_torneo_attivo(conn)
+        riga = conn.execute("SELECT user_id FROM squadre WHERE torneo_id = ? AND LOWER(nome_squadra) = LOWER(?)",
+                            (tid, vecchio)).fetchone()
+        if not riga:
+            return _json(False, "Coppia non trovata: aggiorna la pagina.")
+        if riga[0] != uid and not _is_admin(uid):
+            return _json(False, "Puoi modificare solo la tua coppia.")
+        if not iscrizioni_aperte(conn) and not _is_admin(uid):
+            return _json(False, "Iscrizioni chiuse: per cambiare compagno scrivi a un admin.")
+        coppia = nome_coppia(conn, d.get("g1", ""), d.get("g2", ""))
+        if not coppia:
+            return _json(False, "Scegli entrambi i giocatori.")
+        if coppia.lower() == vecchio.lower():
+            return _json(False, "Nessuna modifica.")
+        nuovi = [g for g in coppia.split("-", 1) if not ST.cerca_giocatore(conn, g)]
+        esito = L.rinomina_coppia(conn, vecchio, coppia)   # stessi controlli (giocatore già in un'altra coppia)
     elif az == "ritira":
         nuovi = []
         esito = L.ritira_coppia(conn, uid, str(d.get("nome", "")).strip() or None)

@@ -1107,7 +1107,7 @@ function vSfMedagliere(){
 }
 
 /* ---------- scheda Iscrizione (tutti i membri): come /iscrivi e /ritira ---------- */
-let IS = null, isB = ["",""], isI = 0;
+let IS = null, isB = ["",""], isI = 0, isMod = "";   // isMod = coppia in modifica (cambia compagno)
 async function caricaIscrizione(){
   try{
     const r = await fetch("/api/iscrizione", {headers:{"X-Init-Data":INIT}});
@@ -1137,15 +1137,20 @@ function vIscrizione(){
     <div class="row"><span>Iscritte</span><b>${n}/${t.max}</b></div>
     ${t.conferma ? `<div class="ok-line">${esc(t.conferma.split("!")[0])}!</div>` : ""}
   </div></section>`;
-  if (!t.aperte) h += '<section><div class="card"><span class="muted">🔒 Iscrizioni chiuse.</span></div></section>';
+  if (isMod) h += `<section><h2>Modifica ${esc(isMod)}</h2><div class="card">
+      <div class="vs">${isSlot(0)}${isSlot(1)}</div>
+      <p class="muted" style="margin:6px 2px 0">La coppia tiene il suo posto in lista.</p>
+      <div class="actions"><button class="b" onclick="isAnnullaMod()">Annulla</button><button class="b pri" onclick="isSalvaMod()" ${isB[0]&&isB[1]?"":"disabled"}>Salva</button></div>
+    </div></section>`;
+  else if (!t.aperte) h += '<section><div class="card"><span class="muted">🔒 Iscrizioni chiuse.</span></div></section>';
   else if (pieno) h += `<section><div class="card"><span class="muted">Torneo al completo (${t.max} coppie): scrivi a un admin per la lista d'attesa.</span></div></section>`;
-  else if (!puo) h += '<section><div class="card"><span class="muted">Sei già iscritto: per cambiare coppia prima ritirati qui sotto.</span></div></section>';
+  else if (!puo) h += '<section><div class="card"><span class="muted">Sei già iscritto: per cambiare compagno usa «Modifica» qui sotto.</span></div></section>';
   else h += `<section><h2>Iscrivi la tua coppia</h2><div class="card">
       <div class="vs">${isSlot(0)}${isSlot(1)}</div>
       <button class="b pri big" style="margin-top:10px" onclick="isIscrivi()" ${isB[0]&&isB[1]?"":"disabled"}>Iscrivi${isB[0]&&isB[1] ? " " + esc(isB[0]+"-"+isB[1]) : ""}</button>
       <p class="muted" style="margin:6px 2px 0">${IS.gruppo ? "La lista aggiornata va in fondo al gruppo." : "⚠️ Nessun gruppo registrato."}</p>
     </div></section>`;
-  if (mie.length) h += `<section><h2>${mie.length > 1 ? "Coppie iscritte da te" : "La tua coppia"}</h2><div class="card">${mie.map(c=>`<div class="row"><span>${esc(c.nome)}</span><button class="b red" onclick="isRitira(${jsq(c.nome)})">Ritira</button></div>`).join("")}</div></section>`;
+  if (mie.length) h += `<section><h2>${mie.length > 1 ? "Coppie iscritte da te" : "La tua coppia"}</h2><div class="card">${mie.map(c=>`<div class="row"><span>${esc(c.nome)}</span><span>${t.aperte || IS.admin ? `<button class="b" onclick="isApriMod(${jsq(c.nome)})">Modifica</button> ` : ""}<button class="b red" onclick="isRitira(${jsq(c.nome)})">Ritira</button></span></div>`).join("")}</div></section>`;
   h += `<section><h2>Coppie iscritte (${n})</h2><div class="card">${IS.squadre.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c.nome)}${c.mia ? ' <span class="pill mine">Tua</span>' : ""}</span></div>`).join("") || '<span class="muted">Ancora nessuna coppia</span>'}</div></section>`;
   return h;
 }
@@ -1162,7 +1167,7 @@ function isFiltra(q){
   const lista = IS.giocatori.filter(g => g.toLowerCase() !== altro && (!t || g.toLowerCase().includes(t)));
   const esatto = IS.giocatori.some(g => g.toLowerCase() === t);
   const gia = {};   // chi è già in una coppia iscritta non si può scegliere
-  IS.squadre.forEach(c => c.nome.split("-").forEach(g => gia[g.trim().toLowerCase()] = c.nome));
+  IS.squadre.filter(c => c.nome !== isMod).forEach(c => c.nome.split("-").forEach(g => gia[g.trim().toLowerCase()] = c.nome));
   lista.sort((x, y) => !!gia[x.toLowerCase()] - !!gia[y.toLowerCase()]);   // liberi in cima
   let h = lista.slice(0, 80).map(g => gia[g.toLowerCase()]
     ? `<button disabled style="opacity:.45">${esc(g)} <small>· già in ${esc(gia[g.toLowerCase()])}</small></button>`
@@ -1175,6 +1180,11 @@ function isFiltra(q){
 function isMetti(nome){ isB[isI] = nome || ""; chiudiFoglio(); render(); }
 async function isIscrivi(){
   if (await isPost({azione:"iscrivi", g1:isB[0], g2:isB[1]})) isB = ["",""];
+}
+function isApriMod(nome){ isMod = nome; isB = nome.split("-").map(x => x.trim()).concat(["",""]).slice(0,2); render(); scrollTo(0,0); }
+function isAnnullaMod(){ isMod = ""; isB = ["",""]; render(); }
+async function isSalvaMod(){
+  if (await isPost({azione:"modifica", nome:isMod, g1:isB[0], g2:isB[1]})) { isMod = ""; isB = ["",""]; render(); }
 }
 async function isRitira(nome){
   if (!await chiedi(`Ritirare ${nome} dal torneo?\nLa lista aggiornata va nel gruppo.`)) return;
