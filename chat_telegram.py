@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 
 from database import get_torneo_attivo, scrivi_stato, leggi_stato
 from logica_tornei import conta_squadre, testo_squadre
+from statistiche import bottone_iscrizione
 
 SECONDI_MSG_TEMPORANEI = 20  # avvisi/errori nel gruppo spariscono dopo 20 s
 
@@ -47,7 +48,8 @@ async def sostituisci_lista(bot, conn, chat_id: int, testo: str):
     """Invia la lista aggiornata e cancella la precedente in quella chat:
     resta sempre UNA sola lista. Prima invia la nuova, poi toglie la vecchia
     (se qualcosa va storto, la lista non sparisce mai del tutto)."""
-    nuovo = await bot.send_message(chat_id=chat_id, text=testo)
+    extra = {"reply_markup": tasti} if (tasti := bottone_iscrizione(bot)) else {}
+    nuovo = await bot.send_message(chat_id=chat_id, text=testo, **extra)
     chiave = f"lista_msg_{chat_id}"
     vecchio = leggi_stato(conn, chiave)
     if vecchio is not None:
@@ -97,6 +99,7 @@ async def aggiorna_lista_gruppo(bot, conn, chat_id: int):
         return
     try:
         await bot.edit_message_text(chat_id=chat_id, message_id=int(msg_id),
-                                    text=testo_squadre(conn, torneo_id, nome_torneo))
+                                    text=testo_squadre(conn, torneo_id, nome_torneo),
+                                    reply_markup=bottone_iscrizione(bot))   # senza, Telegram toglie il bottone
     except Exception:
         pass  # lista cancellata a mano, troppo vecchia o identica

@@ -78,6 +78,13 @@ _max_squadre = 18
 _ripubblica_lista = None
 
 
+def _bottone(bot) -> dict:
+    """Bottone «Iscriviti» sotto la locandina nel gruppo (vuoto se il bot non ha username)."""
+    from statistiche import bottone_iscrizione   # qui: statistiche importa telegram, evita giri di import
+    tasti = bottone_iscrizione(bot)
+    return {"reply_markup": tasti} if tasti else {}
+
+
 def _crea_tabella(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS locandine (
@@ -407,7 +414,7 @@ async def ripubblica_locandina(bot, job_queue, numero: int | None = None, con_48
     if not avviso:
         testo += f"\n\n{_riga_posti(iscritte, conn, torneo_ref)}"
     try:
-        nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=testo)
+        nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=testo, **_bottone(bot))
     except Exception as e:
         return f"❌ Locandina n° {lid} NON ripubblicata: errore Telegram ({e})."
     conn.execute("UPDATE locandine SET msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
@@ -707,7 +714,7 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
         return
     didascalia = f"{_testo_completo(didascalia, extra)}\n\n{_riga_posti(iscritte, conn, torneo_ref)}"
     try:
-        nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
+        nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia, **_bottone(bot))
     except Exception as e:
         # riprovo tra un'ora, senza toccare il post precedente
         _programma_repost(conn, jq, lid, adesso + timedelta(hours=1))
@@ -751,7 +758,7 @@ async def _pubblica(bot, lid: int, job_queue=None) -> str:
     if iscritte:  # locandina a iscrizioni già aperte: mostra subito i posti
         didascalia = f"{didascalia}\n\n{_riga_posti(iscritte, conn, att[0])}"
     try:
-        msg = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia)
+        msg = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=didascalia, **_bottone(bot))
     except Exception as e:
         return (f"❌ Locandina n° {lid} NON pubblicata: errore Telegram ({e})."
                 + (f"\n{esito_torneo}" if esito_torneo else "") + (f"\n{esito_max}" if esito_max else ""))
@@ -1020,7 +1027,8 @@ async def _modifica_pubblicata(bot, lid: int, testo: str) -> str:
     if gruppo is None or not msg_gruppo:
         return "Non trovo il post nel gruppo (nessun gruppo registrato o messaggio sconosciuto)."
     try:
-        await bot.edit_message_caption(chat_id=gruppo, message_id=msg_gruppo, caption=completo)
+        await bot.edit_message_caption(chat_id=gruppo, message_id=msg_gruppo, caption=completo,
+                                       **_bottone(bot))
     except Exception as e:
         if "not modified" in str(e).lower():
             return "Il testo è già quello: nessuna modifica."

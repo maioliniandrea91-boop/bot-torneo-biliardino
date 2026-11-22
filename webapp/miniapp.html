@@ -179,7 +179,8 @@ if (tg) { tg.ready(); tg.expand(); }
 const INIT = tg ? tg.initData : "";
 let S = null, tab = null, foglioAperto = false, bozza = {};
 // link diretto t.me/<bot>/sfide?startapp=sfide: si apre sulla scheda Sfide
-try { if ((window.Telegram?.WebApp?.initDataUnsafe?.start_param || "") === "sfide") tab = "sfide"; } catch(e) {}
+// ?startapp=iscrizione (bottone «Iscriviti» sotto lista e locandina): scheda Iscrizione
+try { const sp = window.Telegram?.WebApp?.initDataUnsafe?.start_param || ""; if (["sfide","iscrizione"].includes(sp)) tab = sp; } catch(e) {}
 const FASI = {nessuna:"Da preparare", iscrizioni:"Pronto per i gironi", gironi:"Gironi in corso", ko:"Tabellone a eliminazione", finito:"Concluso"};
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -195,8 +196,9 @@ async function carica(forza){
     const d = await r.json();
     if (d.invariato) return;
     const primo = !S;
-    S = d; if (!foglioAperto && (!["tornei","sfide"].includes(tab) || primo)) render();
+    S = d; if (!foglioAperto && (!["tornei","sfide","iscrizione"].includes(tab) || primo)) render();
     if (primo && tab === "tornei") caricaPannello();
+    if (primo && tab === "iscrizione") caricaIscrizione();
     if (primo && tab === "sfide") caricaSfide();
   }catch(e){ /* rete assente: riprova al prossimo giro */ }
 }
@@ -296,6 +298,8 @@ function render(){
   if (!schede.length) schede.push(["attesa","Torneo"]);
   // Sfide per tutti: prima scheda per i giocatori quando non c'è un torneo in corso
   if (!["gironi","ko","finito"].includes(S.fase) && !admin()) schede.unshift(["sfide","Sfide"]); else schede.push(["sfide","Sfide"]);
+  // Iscrizione per tutti: prima scheda dei giocatori prima del torneo, in fondo durante
+  if (!["gironi","ko","finito"].includes(S.fase) && !admin()) schede.unshift(["iscrizione","Iscrizione"]); else schede.push(["iscrizione","Iscrizione"]);
   if (!tab || !schede.some(s=>s[0]===tab)) tab = schede[0][0];
   $("#prova").innerHTML = S.prova && veroAdmin()
     ? `<span>🧪 Torneo di prova — ${vistaGiocatore ? "vista giocatore" : "vista admin"}</span><button onclick="cambiaVista()">${vistaGiocatore ? "Torna admin" : "👤 Vista giocatore"}</button>${!vistaGiocatore && ["gironi","ko"].includes(S.fase) ? '<button onclick="simula()">🎲 Simula giro</button>' : ""}${!vistaGiocatore && S.fase === "gironi" ? '<button onclick="completaGironi()">⏩ Completa gironi</button>' : ""}`
@@ -304,7 +308,7 @@ function render(){
   $("#tabs").innerHTML = schede.map(([k,n]) => `<button class="${k===tab?"on":""}" onclick="vai('${k}')">${n}</button>`).join("");
   const brkPrima = $("#brk"), scrollPrima = brkPrima ? brkPrima.scrollLeft : null;
   $("#main").className = "v-" + tab;
-  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa, tornei:vTornei, sfide:vSfide})[tab]();
+  $("#main").innerHTML = ({partite:vPartite, gironi:vGironi, tabellone:vTabellone, admin:vAdmin, attesa:vAttesa, tornei:vTornei, sfide:vSfide, iscrizione:vIscrizione})[tab]();
   const brk = $("#brk");
   if (brk){
     if (scrollPrima !== null) brk.scrollLeft = scrollPrima;
@@ -314,7 +318,7 @@ function render(){
     }
   }
 }
-function vai(k){ tab = k; render(); window.scrollTo(0,0); if (k === "tornei") caricaPannello(); if (k === "sfide") caricaSfide(); }
+function vai(k){ tab = k; render(); window.scrollTo(0,0); if (k === "tornei") caricaPannello(); if (k === "sfide") caricaSfide(); if (k === "iscrizione") caricaIscrizione(); }
 
 function vAttesa(){
   const n = (S.iscritte || S.coppie || []).length;
@@ -1100,6 +1104,79 @@ function vSfMedagliere(){
   return `<section><h2>Medagliere ${sel}</h2><div class="card"><table><tr><th>#</th><th>Giocatore</th><th>🥇</th><th>🥈</th><th>🥉</th></tr>
     ${m.righe.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.nome)}</td><td><b>${r.m[0]}</b></td><td>${r.m[1]}</td><td>${r.m[2]}</td></tr>`).join("")}</table></div>
     <p class="muted" style="margin:0 6px">Tornei conteggiati: ${m.contati} (esclusi i 5X)</p></section>`;
+}
+
+/* ---------- scheda Iscrizione (tutti i membri): come /iscrivi e /ritira ---------- */
+let IS = null, isB = ["",""], isI = 0;
+async function caricaIscrizione(){
+  try{
+    const r = await fetch("/api/iscrizione", {headers:{"X-Init-Data":INIT}});
+    const d = await r.json();
+    if (!r.ok){ toast(d.errore || "Errore", true); return; }
+    IS = d;
+    if (tab === "iscrizione" && !foglioAperto) render();
+  }catch(e){ toast("Connessione assente", true); }
+}
+async function isPost(dati){
+  try{
+    const r = await fetch("/api/iscrizione", {method:"POST", headers:{"X-Init-Data":INIT,"Content-Type":"application/json"}, body:JSON.stringify(dati)});
+    const d = await r.json();
+    if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return null; }
+    vibra("success"); toast(d.testo);
+    if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);
+    await caricaIscrizione();
+    return d;
+  }catch(e){ toast("Connessione assente", true); return null; }
+}
+const isSlot = i => `<button class="slot ${isB[i]?"on":""}" onclick="isApriElenco(${i})">${isB[i] ? esc(isB[i]) : "+ Giocatore " + (i+1)}</button>`;
+function vIscrizione(){
+  if (!IS) return '<div class="empty">Caricamento…</div>';
+  const t = IS.torneo, n = IS.squadre.length, mie = IS.squadre.filter(c => c.mia);
+  const pieno = n >= t.max, puo = t.aperte && !pieno && (IS.admin || !mie.length);
+  let h = `<section><h2>${esc(t.nome)}</h2><div class="card">
+    <div class="row"><span>Iscritte</span><b>${n}/${t.max}</b></div>
+    ${t.conferma ? `<div class="ok-line">${esc(t.conferma.split("!")[0])}!</div>` : ""}
+  </div></section>`;
+  if (!t.aperte) h += '<section><div class="card"><span class="muted">🔒 Iscrizioni chiuse.</span></div></section>';
+  else if (pieno) h += `<section><div class="card"><span class="muted">Torneo al completo (${t.max} coppie): scrivi a un admin per la lista d'attesa.</span></div></section>`;
+  else if (!puo) h += '<section><div class="card"><span class="muted">Sei già iscritto: per cambiare coppia prima ritirati qui sotto.</span></div></section>';
+  else h += `<section><h2>Iscrivi la tua coppia</h2><div class="card">
+      <div class="vs">${isSlot(0)}${isSlot(1)}</div>
+      <button class="b pri big" style="margin-top:10px" onclick="isIscrivi()" ${isB[0]&&isB[1]?"":"disabled"}>Iscrivi${isB[0]&&isB[1] ? " " + esc(isB[0]+"-"+isB[1]) : ""}</button>
+      <p class="muted" style="margin:6px 2px 0">${IS.gruppo ? "La lista aggiornata va in fondo al gruppo." : "⚠️ Nessun gruppo registrato."}</p>
+    </div></section>`;
+  if (mie.length) h += `<section><h2>${mie.length > 1 ? "Coppie iscritte da te" : "La tua coppia"}</h2><div class="card">${mie.map(c=>`<div class="row"><span>${esc(c.nome)}</span><button class="b red" onclick="isRitira(${jsq(c.nome)})">Ritira</button></div>`).join("")}</div></section>`;
+  h += `<section><h2>Coppie iscritte (${n})</h2><div class="card">${IS.squadre.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c.nome)}${c.mia ? ' <span class="pill mine">Tua</span>' : ""}</span></div>`).join("") || '<span class="muted">Ancora nessuna coppia</span>'}</div></section>`;
+  return h;
+}
+function isApriElenco(i){
+  isI = i;
+  apriFoglio(`<div style="font-weight:700;margin-bottom:8px">Giocatore ${i+1}</div>
+    <input class="t" id="isQ" placeholder="Cerca o scrivi un nome" autocomplete="off" oninput="isFiltra(this.value)">
+    <div class="elenco" id="isEl"></div>
+    <div class="actions">${isB[i] ? '<button class="b red" onclick="isMetti(null)">Togli</button>' : ""}<button class="b" onclick="chiudiFoglio()">Annulla</button></div>`);
+  isFiltra("");
+}
+function isFiltra(q){
+  const t = q.trim().toLowerCase(), altro = (isB[1-isI] || "").toLowerCase();
+  const lista = IS.giocatori.filter(g => g.toLowerCase() !== altro && (!t || g.toLowerCase().includes(t)));
+  const esatto = IS.giocatori.some(g => g.toLowerCase() === t);
+  const gia = {};   // chi è già in una coppia iscritta non si può scegliere
+  IS.squadre.forEach(c => c.nome.split("-").forEach(g => gia[g.trim().toLowerCase()] = c.nome));
+  lista.sort((x, y) => !!gia[x.toLowerCase()] - !!gia[y.toLowerCase()]);   // liberi in cima
+  let h = lista.slice(0, 80).map(g => gia[g.toLowerCase()]
+    ? `<button disabled style="opacity:.45">${esc(g)} <small>· già in ${esc(gia[g.toLowerCase()])}</small></button>`
+    : `<button onclick="isMetti(${jsq(g)})">${esc(g)}</button>`).join("");
+  if (t && !esatto) h += `<button class="nuovo" onclick="isMetti(${jsq(q.trim())})">➕ Giocatore nuovo: «${esc(q.trim())}»</button>`;
+  $("#isEl").innerHTML = h || '<p class="muted">Nessun giocatore: scrivi il nome.</p>';
+}
+function isMetti(nome){ isB[isI] = nome || ""; chiudiFoglio(); render(); }
+async function isIscrivi(){
+  if (await isPost({azione:"iscrivi", g1:isB[0], g2:isB[1]})) isB = ["",""];
+}
+async function isRitira(nome){
+  if (!await chiedi(`Ritirare ${nome} dal torneo?\nLa lista aggiornata va nel gruppo.`)) return;
+  isPost({azione:"ritira", nome});
 }
 
 carica(true);

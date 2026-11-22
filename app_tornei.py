@@ -1182,6 +1182,7 @@ def crea_web_app(bot=None, jq=None) -> web.Application:
     import pannello   # qui e non in testa: pannello legge config (serve BOT_TOKEN)
     import locandina_app
     import sfide_app
+    import iscrizione_app
     app = web.Application(middlewares=[_errori_server], client_max_size=pannello.MAX_FOTO + 1024 * 1024)
     app["bot"] = bot
     app["jq"] = jq
@@ -1193,6 +1194,7 @@ def crea_web_app(bot=None, jq=None) -> web.Application:
     pannello.aggiungi_rotte(app, _utente, lambda uid: _is_admin(uid), _conn)   # pannello admin «Tornei»
     locandina_app.aggiungi_rotte(app)   # sotto-scheda «Locandina» del pannello Tornei
     sfide_app.aggiungi_rotte(app, _utente, lambda uid: _is_admin(uid), _conn, _admin_ids)   # scheda «Sfide», per tutti
+    iscrizione_app.aggiungi_rotte(app, _utente, lambda uid: _is_admin(uid), _conn)   # scheda «Iscrizione», per tutti
     app.router.add_static("/static/", CARTELLA_WEB)          # mascotte ridotta
     app.router.add_static("/assets/", CARTELLA_ASSETS)       # font Bebas e Yellowtail
     return app

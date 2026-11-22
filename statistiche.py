@@ -448,6 +448,19 @@ def bottone_sfide(bot):
         "📱 Segna una sfida", url=f"https://t.me/{nome}/{APP_SFIDE}?startapp=sfide")]])
 
 
+def bottone_iscrizione(bot):
+    """Bottone «Iscriviti»: apre la Mini App sulla scheda Iscrizione (stessa app
+    BotFather delle sfide, cambia solo startapp). Sotto la lista squadre e la locandina."""
+    try:
+        nome = bot.username
+    except Exception:
+        nome = None
+    if not nome:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "📝 Iscriviti / ritirati", url=f"https://t.me/{nome}/{APP_SFIDE}?startapp=iscrizione")]])
+
+
 async def _sostituisci(bot, conn, chat_id: int, chiave: str, testo: str):
     """Come la lista squadre: un solo messaggio vivo per tipo, il vecchio sparisce.
     Sotto la classifica c'è sempre il bottone per segnare una sfida."""
