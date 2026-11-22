@@ -123,7 +123,7 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
 NOTA_OMONIMI = "Se è un'altra persona con lo stesso nome, aggiungi l'iniziale del cognome (es. Gianni G.)."
 
 
-def giocatore_gia_iscritto(conn, torneo_id: int, nome_squadra: str) -> str | None:
+def giocatore_gia_iscritto(conn, torneo_id: int, nome_squadra: str, escludi_id: int | None = None) -> str | None:
     """Errore se uno dei due giocatori di 'Nome1-Nome2' è già in un'altra coppia del torneo.
     Nomi non nel formato a coppia: nessun controllo (li sistema l'admin con /rinomina)."""
     parti = [p.strip().lower() for p in nome_squadra.split("-")]
@@ -131,7 +131,8 @@ def giocatore_gia_iscritto(conn, torneo_id: int, nome_squadra: str) -> str | Non
         return None
     if parti[0] == parti[1]:
         return "Lo stesso giocatore compare due volte."
-    for (esistente,) in conn.execute("SELECT nome_squadra FROM squadre WHERE torneo_id = ?", (torneo_id,)):
+    for (esistente,) in conn.execute("SELECT nome_squadra FROM squadre WHERE torneo_id = ? AND id IS NOT ?",
+                                     (torneo_id, escludi_id)):
         gia = [p.strip().lower() for p in esistente.split("-")]
         for nome, p in zip(nome_squadra.split("-"), parti):
             if len(gia) == 2 and p in gia:
@@ -252,6 +253,9 @@ def rinomina_coppia(conn, vecchio: str, nuovo_scritto: str) -> Esito:
 
     if any(r[1].lower() == nuovo.lower() and r[0] != squadra_id for r in righe):
         return _errore(f"Il nome '{nuovo}' è già usato da un'altra squadra.")
+
+    if (err := giocatore_gia_iscritto(conn, torneo_id, nuovo, escludi_id=squadra_id)):   # la coppia stessa non conta
+        return _errore(err)
 
     conn.execute("UPDATE squadre SET nome_squadra = ? WHERE id = ?", (nuovo, squadra_id))
     conn.commit()

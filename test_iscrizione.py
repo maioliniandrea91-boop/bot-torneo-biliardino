@@ -106,6 +106,12 @@ async def main():
     r = await r.json()
     assert not r["ok"] and "Matteo è già iscritto" in r["errore"], r
 
+    # rinomina (comando e matita del pannello): stesso controllo, la coppia stessa non conta
+    e = L.rinomina_coppia(conn, "Luca-Matteo", "Luca-Paolo")   # Paolo è in Paolo-Gianni
+    assert not e.ok and "Paolo è già iscritto in Paolo-Gianni" in e.testo, e
+    assert L.rinomina_coppia(conn, "Luca-Matteo", "Luca-Mattia").ok   # cambia solo un nome
+    assert L.rinomina_coppia(conn, "Luca-Mattia", "Mattia-Luca").ok    # stessi giocatori, ordine diverso
+
     await cli.close()
     print("test_iscrizione: tutto OK")
 

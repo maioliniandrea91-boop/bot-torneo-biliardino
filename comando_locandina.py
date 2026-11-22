@@ -221,7 +221,7 @@ def leggi_quando(testo: str):
 def _didascalia(dati) -> str:
     return (
         f"🏆 Torneo di biliardino — {testo_data(dati['data'], dati['ora']).capitalize()}\n"
-        "Iscrivi la tua coppia con /iscrivi NomeSquadra"
+        "👇 Iscriviti col bottone qui sotto (oppure /iscrivi Nome1-Nome2)"
     )
 
 
