@@ -221,7 +221,7 @@ def leggi_quando(testo: str):
 def _didascalia(dati) -> str:
     return (
         f"🏆 Torneo di biliardino — {testo_data(dati['data'], dati['ora']).capitalize()}\n"
-        "👇 Iscriviti col bottone qui sotto (oppure /iscrivi Nome1-Nome2)"
+        + RIGA_ISCRIVI
     )
 
 
@@ -516,7 +516,13 @@ def _tastiera(lid: int):
     ])
 
 
+RIGA_ISCRIVI_VECCHIA = "Iscrivi la tua coppia con /iscrivi NomeSquadra"
+RIGA_ISCRIVI = "👇 Iscriviti col bottone qui sotto (oppure /iscrivi Nome1-Nome2)"
+
+
 def _testo_completo(didascalia: str, extra: str | None) -> str:
+    # le locandine create prima del bottone «Iscriviti» hanno la riga vecchia salvata: la aggiorna
+    didascalia = didascalia.replace(RIGA_ISCRIVI_VECCHIA, RIGA_ISCRIVI)
     return f"{didascalia}\n\n{extra}" if extra else didascalia
 
 
