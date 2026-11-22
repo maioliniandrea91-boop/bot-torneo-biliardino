@@ -20,7 +20,7 @@ from aiohttp import web
 import logica_tornei as L
 import statistiche as ST
 from chat_telegram import pubblica_lista_gruppo
-from database import chat_gruppo_registrato, get_torneo_attivo, iscrizioni_aperte, max_coppie
+from database import chat_gruppo_registrato, get_torneo_attivo, iscrizioni_aperte, max_coppie  # noqa: F401
 
 _utente = None
 _is_admin = None
@@ -93,15 +93,7 @@ async def h_azione(req):
         coppia = nome_coppia(conn, d.get("g1", ""), d.get("g2", ""))
         if not coppia:
             return _json(False, "Scegli entrambi i giocatori.")
-        g1, g2 = coppia.split("-", 1)
-        if g1.lower() == g2.lower():
-            return _json(False, "Lo stesso giocatore compare due volte.")
-        tid, _ = get_torneo_attivo(conn)
-        gia = {g.strip().lower(): n for (n,) in conn.execute(
-            "SELECT nome_squadra FROM squadre WHERE torneo_id = ?", (tid,)) for g in n.split("-")}
-        for g in (g1, g2):
-            if g.lower() in gia:
-                return _json(False, f"{g} è già iscritto in {gia[g.lower()]}.")
+        g1, g2 = coppia.split("-", 1)   # doppioni e giocatori già in coppia: li blocca logica_tornei
         nuovi = [g for g in (g1, g2) if not ST.cerca_giocatore(conn, g)]
         esito = L.iscrivi_coppia(conn, uid, u.get("username") or u.get("first_name"), coppia,
                                  bool(_is_admin(uid)))

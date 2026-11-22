@@ -67,8 +67,8 @@ async def main():
     r = await az(ALTRO, azione="iscrivi", g1="Paolo", g2="Gianni")
     assert r["ok"] and "🆕 Gianni" in r["testo"], r
     assert ST.cerca_giocatore(conn, "Gianni") and (GRUPPO, prima) in bot.cancellati   # una sola lista viva
-    r = await az(ALTRO, azione="iscrivi", g1="X", g2="x")
-    assert not r["ok"]
+    r = await az(ADMIN, azione="iscrivi", g1="X", g2="x")
+    assert not r["ok"] and "due volte" in r["errore"], r
 
     s = await stato()
     assert [(c["nome"], c["mia"]) for c in s["squadre"]] == [("Luca-Matteo", True), ("Paolo-Gianni", False)]
@@ -84,7 +84,7 @@ async def main():
     # admin: più coppie
     assert (await az(ADMIN, azione="iscrivi", g1="Luca", g2="Matteo"))["ok"]
     r = await az(ADMIN, azione="iscrivi", g1="Giovanni", g2="paolo")   # Paolo è già in Paolo-Gianni
-    assert not r["ok"] and "Paolo è già iscritto in Paolo-Gianni" in r["errore"], r
+    assert not r["ok"] and "Paolo è già iscritto in Paolo-Gianni" in r["errore"] and "Gianni G." in r["errore"], r
     assert (await az(ADMIN, azione="iscrivi", g1="Giovanni", g2="Nuovo"))["ok"]
     # iscrizioni chiuse
     set_iscrizioni(conn, False)
@@ -95,6 +95,16 @@ async def main():
     # correzione silenziosa della lista: il bottone resta
     await aggiorna_lista_gruppo(bot, conn, GRUPPO)
     assert modificati and modificati[-1]["reply_markup"].inline_keyboard[0][0].url == URL
+
+    # stesso controllo per il comando e il pannello admin (logica comune)
+    import logica_tornei as L
+    e = L.iscrivi_coppia(conn, ADMIN, "admin", "Luca-Zeno", True)   # Luca è in Luca-Matteo
+    assert not e.ok and "Luca è già iscritto in Luca-Matteo" in e.testo, e
+    assert L.iscrivi_coppia(conn, ADMIN, "admin", "Luca G.-Zeno", True).ok   # omonimo con iniziale
+    r = await cli.post("/api/pannello", json={"azione": "iscrivi", "g1": "matteo", "g2": "Ugo"},
+                       headers={"X-Init-Data": init_data(ADMIN)})
+    r = await r.json()
+    assert not r["ok"] and "Matteo è già iscritto" in r["errore"], r
 
     await cli.close()
     print("test_iscrizione: tutto OK")

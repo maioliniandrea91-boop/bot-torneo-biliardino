@@ -1168,6 +1168,8 @@ function isFiltra(q){
     ? `<button disabled style="opacity:.45">${esc(g)} <small>· già in ${esc(gia[g.toLowerCase()])}</small></button>`
     : `<button onclick="isMetti(${jsq(g)})">${esc(g)}</button>`).join("");
   if (t && !esatto) h += `<button class="nuovo" onclick="isMetti(${jsq(q.trim())})">➕ Giocatore nuovo: «${esc(q.trim())}»</button>`;
+  if (lista.some(g => gia[g.toLowerCase()]))
+    h += '<p class="muted" style="margin:8px 4px">I nomi in grigio sono già iscritti. È un\'altra persona con lo stesso nome? Scrivila con l\'iniziale del cognome, es. «Gianni G.»</p>';
   $("#isEl").innerHTML = h || '<p class="muted">Nessun giocatore: scrivi il nome.</p>';
 }
 function isMetti(nome){ isB[isI] = nome || ""; chiudiFoglio(); render(); }

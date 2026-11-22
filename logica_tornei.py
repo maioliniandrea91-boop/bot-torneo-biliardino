@@ -120,6 +120,25 @@ def testo_squadre(conn, torneo_id: int, nome_torneo: str) -> str:
     return testo
 
 
+NOTA_OMONIMI = "Se è un'altra persona con lo stesso nome, aggiungi l'iniziale del cognome (es. Gianni G.)."
+
+
+def giocatore_gia_iscritto(conn, torneo_id: int, nome_squadra: str) -> str | None:
+    """Errore se uno dei due giocatori di 'Nome1-Nome2' è già in un'altra coppia del torneo.
+    Nomi non nel formato a coppia: nessun controllo (li sistema l'admin con /rinomina)."""
+    parti = [p.strip().lower() for p in nome_squadra.split("-")]
+    if len(parti) != 2:
+        return None
+    if parti[0] == parti[1]:
+        return "Lo stesso giocatore compare due volte."
+    for (esistente,) in conn.execute("SELECT nome_squadra FROM squadre WHERE torneo_id = ?", (torneo_id,)):
+        gia = [p.strip().lower() for p in esistente.split("-")]
+        for nome, p in zip(nome_squadra.split("-"), parti):
+            if len(gia) == 2 and p in gia:
+                return f"{nome.strip()} è già iscritto in {esistente}. {NOTA_OMONIMI}"
+    return None
+
+
 def iscrivi_coppia(conn, user_id: int, username: str | None, nome_scritto: str, admin: bool) -> Esito:
     """Iscrive una coppia al torneo attivo. Gli utenti normali: una coppia a testa;
     gli admin quante ne vogliono (spesso le iscrive Andrea per gli altri)."""
@@ -145,6 +164,10 @@ def iscrivi_coppia(conn, user_id: int, username: str | None, nome_scritto: str, 
     ).fetchone()
     if duplicato:
         return _errore(f"Il nome '{nome_squadra}' è già stato preso in questo torneo. Scegline un altro.")
+
+    # stesso giocatore in due coppie: vale per tutti, admin compresi (comando, pannello, app)
+    if (err := giocatore_gia_iscritto(conn, torneo_id, nome_squadra)):
+        return _errore(err)
 
     massimo = max_coppie(conn, torneo_id)
     if conta_squadre(conn, torneo_id) >= massimo:
