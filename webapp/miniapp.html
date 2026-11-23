@@ -1152,7 +1152,25 @@ function vIscrizione(){
     </div></section>`;
   if (mie.length) h += `<section><h2>${mie.length > 1 ? "Coppie iscritte da te" : "La tua coppia"}</h2><div class="card">${mie.map(c=>`<div class="row"><span>${esc(c.nome)}</span><span>${t.aperte || IS.admin ? `<button class="b" onclick="isApriMod(${jsq(c.nome)})">Modifica</button> ` : ""}<button class="b red" onclick="isRitira(${jsq(c.nome)})">Ritira</button></span></div>`).join("")}</div></section>`;
   h += `<section><h2>Coppie iscritte (${n})</h2><div class="card">${IS.squadre.map((c,i)=>`<div class="row"><span>${i+1}. ${esc(c.nome)}${c.mia ? ' <span class="pill mine">Tua</span>' : ""}</span></div>`).join("") || '<span class="muted">Ancora nessuna coppia</span>'}</div></section>`;
+  h += vRegolamenti();
   return h;
+}
+// Regolamenti ufficiali FIGeST calcio balilla (versione 2026, verificati il 23/11/2026).
+// Nuova revisione: cambiare solo questi link.
+const REGOLAMENTI = [
+  ["Rollerball (3 tocchi)", "https://www.figestcalciobalilla.it/wp-content/uploads/2026/01/Regolamento-Rollerball.pdf"],
+  ["Volo", "https://www.figestcalciobalilla.it/wp-content/uploads/2026/01/Regolamento-Volo.pdf"],
+  ["Tradizionale", "https://www.figestcalciobalilla.it/wp-content/uploads/2026/01/Regolamento-Tradizionale.pdf"],
+  ["Regolamento generale", "https://www.figestcalciobalilla.it/wp-content/uploads/2025/04/Regolamento-Generale.pdf"],
+];
+function vRegolamenti(){
+  return `<section><h2>📖 Regolamenti FIGeST</h2><div class="card">${REGOLAMENTI.map(([n,u],i)=>`<div class="row"><span>${esc(n)}</span><button class="b" onclick="apriRegolamento(${i})">Apri PDF</button></div>`).join("")}
+    <p class="muted" style="margin:6px 2px 0">Versione 2026 · figestcalciobalilla.it</p></div></section>`;
+}
+function apriRegolamento(i){
+  const u = REGOLAMENTI[i][1];
+  try { if (tg && tg.openLink) { tg.openLink(u); return; } } catch(e) {}
+  window.open(u, "_blank");
 }
 function isApriElenco(i){
   isI = i;
