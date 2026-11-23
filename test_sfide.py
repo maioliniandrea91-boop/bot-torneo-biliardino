@@ -3,7 +3,7 @@ python3 test_sfide.py  (database temporaneo)"""
 import asyncio
 import os
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 CARTELLA = tempfile.mkdtemp()
 os.environ["BOT_TOKEN"] = "123:prova"
@@ -87,6 +87,21 @@ async def main():
     assert s["ultime"]["totale"] == 2 and s["ultime"]["sfide"][0]["va"] == 3
     assert s["classifica"]["righe"][0]["nome"] in ("Luca", "Matteo") and s["classifica"]["righe"][0]["g"] == 13
 
+    # ---- doppio invio: stessa sfida entro pochi minuti (anche a coppie scambiate) rifiutata, nulla salvato
+    inviati = len(bot.inviati)
+    r = await az(azione="salva", a=["Luca", "Paolo"], b=["Matteo", "Michele"], va=3, vb=3)
+    assert not r["ok"] and "già stata salvata" in r["errore"] and r["doppia"] == 2, r
+    r = await az(azione="salva", a=["Paolo", "Michele"], b=["Matteo", "luca"], va=2, vb=5)
+    assert not r["ok"] and r["doppia"] == 1, r
+    assert (await stato())["ultime"]["totale"] == 2 and len(bot.inviati) == inviati
+    # risultato diverso o sfida vecchia: si salva
+    c = db_connect(); c.execute("UPDATE sfide SET inserita_il = ? WHERE id = 1",
+                                ((datetime.now() - timedelta(minutes=ST.DOPPIA_MINUTI + 1)).isoformat(),)); c.commit()
+    assert ST.sfida_doppia(c, *[[ST.cerca_giocatore(c, n)[0] for n in x] for x in (["Luca", "Matteo"], ["Paolo", "Michele"])],
+                           5, 2, ST._oggi()) is None
+    assert ST.sfida_doppia(c, *[[ST.cerca_giocatore(c, n)[0] for n in x] for x in (["Luca", "Paolo"], ["Matteo", "Michele"])],
+                           3, 2, ST._oggi()) is None
+
     # ---- errori: giocatore doppio, 0-0, data futura, mancano giocatori
     for d, err in [
         (dict(a=["Luca", "luca"], b=["Paolo", "Michele"], va=1, vb=0), "due volte"),
@@ -146,8 +161,10 @@ async def main():
     assert s["admin"] and s["ultime"]["totale"] == 3
 
     # ---- paginazione, anni, medagliere
-    for _ in range(25):
-        await az(azione="salva", a=["Luca", "Matteo"], b=["Paolo", "Michele"], va=1, vb=0)
+    vecchio = (datetime.now() - timedelta(hours=1)).isoformat()
+    for _ in range(25):   # sfide uguali: ognuna "vecchia" di un'ora, sennò è un doppio invio
+        assert (await az(azione="salva", a=["Luca", "Matteo"], b=["Paolo", "Michele"], va=1, vb=0))["ok"]
+        c = db_connect(); c.execute("UPDATE sfide SET inserita_il = ?", (vecchio,)); c.commit()
     s = await stato(q="?pagina=2")
     assert s["ultime"]["pagina"] == 2 and s["ultime"]["pagine"] == 2 and len(s["ultime"]["sfide"]) == 8
     assert ST._oggi().year in s["anni"]

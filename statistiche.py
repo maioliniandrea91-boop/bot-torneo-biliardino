@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from html import escape
 from zoneinfo import ZoneInfo
@@ -247,6 +247,25 @@ def leggi_riga(riga: str):
 
 # ======================= SFIDE: SALVA E ANNULLA (senza Telegram) =======================
 # Una sola logica, due ingressi: /sfida e /annullasfida, e la scheda «Sfide» della Mini App.
+
+DOPPIA_MINUTI = 5   # una sfidina vera dura più di così: stessa sfida entro 5 minuti = doppio invio
+
+
+def sfida_doppia(conn, a_ids, b_ids, va: int, vb: int, data_sfide: date) -> int | None:
+    """Numero della stessa sfida (stessi 4 giocatori e stesso risultato, anche a coppie scambiate)
+    inserita negli ultimi DOPPIA_MINUTI minuti e non annullata; None se non c'è."""
+    da = (datetime.now() - timedelta(minutes=DOPPIA_MINUTI)).isoformat()
+    righe = conn.execute(
+        "SELECT id, a1, a2, b1, b2, vinte_a, vinte_b FROM sfide "
+        "WHERE annullata = 0 AND data = ? AND inserita_il >= ? ORDER BY id DESC",
+        (data_sfide.isoformat(), da)).fetchall()
+    A, B = set(a_ids), set(b_ids)
+    for sid, a1, a2, b1, b2, x, y in righe:
+        ra, rb = {a1, a2}, {b1, b2}
+        if (ra == A and rb == B and (x, y) == (va, vb)) or (ra == B and rb == A and (x, y) == (vb, va)):
+            return sid
+    return None
+
 
 def salva_sfide(conn, lette, data_sfide: date, user_id) -> tuple[list[int], list[str]]:
     """lette = [((n1, n2), (n3, n4), vinte_a, vinte_b), ...] già controllate.

@@ -1020,9 +1020,9 @@ function vSfNuova(){
       <div class="row"><span>${nB}</span>${step("vb", sfB.vb)}</div>
       <div class="row"><span>Data</span><input type="date" class="t" style="width:auto" max="${SF.oggi}" value="${sfB.data || SF.oggi}" onchange="sfB.data = this.value === SF.oggi ? '' : this.value"></div>
     </div>
-    <button class="b pri big" onclick="sfSalva()" ${pronta?"":"disabled"}>Salva sfida${pronta ? ` · ${sfB.va}-${sfB.vb}` : ""}</button>
+    <button class="b pri big" onclick="sfSalva()" ${pronta && !sfInvio ?"":"disabled"}>${sfInvio ? "Salvataggio…" : "Salva sfida" + (pronta ? ` · ${sfB.va}-${sfB.vb}` : "")}</button>
     <div class="actions"><button class="b" onclick="sfB.g=[sfB.g[2],sfB.g[3],sfB.g[0],sfB.g[1]];[sfB.va,sfB.vb]=[sfB.vb,sfB.va];render()">⇄ Scambia coppie</button><button class="b" onclick="sfB={g:['','','',''],va:0,vb:0,data:sfB.data,scelte:{}};render()">Svuota</button></div>
-    <p class="muted" style="margin:8px 6px">${SF.gruppo ? "La classifica aggiornata va in fondo al gruppo." : "⚠️ Nessun gruppo registrato: la classifica non andrà nel gruppo."} Dopo il salvataggio i giocatori restano: per la sfida dopo cambi solo il risultato.</p></section>`;
+    <p class="muted" style="margin:8px 6px">${SF.gruppo ? "La classifica aggiornata va in fondo al gruppo." : "⚠️ Nessun gruppo registrato: la classifica non andrà nel gruppo."} Dopo il salvataggio le caselle si svuotano: per la sfida dopo scegli di nuovo i giocatori.</p></section>`;
 }
 /* scelta giocatore da elenco */
 let sfI = 0;
@@ -1043,15 +1043,21 @@ function sfFiltra(q){
   $("#sfEl").innerHTML = h || '<p class="muted">Nessun giocatore: scrivi il nome.</p>';
 }
 function sfMetti(nome){ sfB.g[sfI] = nome || ""; chiudiFoglio(); }
-/* salvataggio, con le domande sui nomi nuovi */
+/* salvataggio, con le domande sui nomi nuovi; sfInvio blocca i tocchi ripetuti mentre il server risponde */
+let sfInvio = false;
 async function sfSalva(){
-  const d = await sfPost({azione:"salva", a:[sfB.g[0],sfB.g[1]], b:[sfB.g[2],sfB.g[3]], va:sfB.va, vb:sfB.vb, data:sfB.data||null, scelte:sfB.scelte});
-  if (!d) return;
+  if (sfInvio) return;
+  sfInvio = true; render();
+  let d;
+  try { d = await sfPost({azione:"salva", a:[sfB.g[0],sfB.g[1]], b:[sfB.g[2],sfB.g[3]], va:sfB.va, vb:sfB.vb, data:sfB.data||null, scelte:sfB.scelte}); }
+  finally { sfInvio = false; }
+  if (!d){ render(); return; }
   if (!d.ok && d.sconosciuti){ sfChiedi(d.sconosciuti, 0); return; }
-  if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return; }
+  if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); render(); return; }
   vibra("success"); toast(d.testo);
   if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);
-  sfB.va = 0; sfB.vb = 0; sfB.scelte = {}; if (d.nomi) sfB.g = d.nomi;
+  sfB = {g:["","","",""], va:0, vb:0, data:sfB.data, scelte:{}};   // caselle vuote: niente sfida ripetuta per errore
+  render();
   await caricaSfide();
 }
 function sfChiedi(lista, k){

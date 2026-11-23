@@ -165,6 +165,12 @@ async def _salva(req, conn, uid: int, d: dict):
     if len(set(chiavi)) != 4:
         return _json(False, "Lo stesso giocatore compare due volte.")
 
+    # doppio invio (tocco ripetuto o due persone che segnano la stessa sfida): stessa sfida pochi minuti fa = rifiutata
+    if all(isinstance(c, int) for c in chiavi):
+        gia = ST.sfida_doppia(conn, chiavi[:2], chiavi[2:], va, vb, data_sfida)
+        if gia:
+            return _json(False, f"⚠️ Questa sfida è già stata salvata poco fa (n° {gia}). Se l'avete giocata davvero un'altra volta, riprova tra qualche minuto.", doppia=gia)
+
     for n, gid in soprannomi:
         errore = ST.aggiungi_soprannome(conn, n, gid)
         if errore:
