@@ -1208,10 +1208,10 @@ async def avvia_server(application):
     riprendi_cancellazioni(application.job_queue, application.bot)
     url = url_pubblico()
     print(f"Server web app tornei sulla porta {PORTA} — {url or 'PUBLIC_URL non impostata'}")
-    if url:   # bottone "Torneo" accanto alla tastiera nelle chat private col bot
+    if url:   # bottone "🏓 Biliardino" accanto alla tastiera nelle chat private col bot
         try:
             await application.bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp("Torneo", WebAppInfo(f"{url}/app")))
+                menu_button=MenuButtonWebApp("🏓 Biliardino", WebAppInfo(f"{url}/app")))
         except Exception as e:
             print("Menu button non impostato:", e)
 
