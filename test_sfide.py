@@ -171,14 +171,49 @@ async def main():
     r = await az(ADMIN, azione="modifica", id=sid, va=prima["va"], vb=prima["vb"])
     assert not r["ok"] and "è già" in r["errore"]
     r = await az(ADMIN, azione="modifica", id=sid, va=6, vb=1)
-    assert r["ok"] and f"{prima['va']}-{prima['vb']} → 6-1" in r["testo"], r
-    assert bot.inviati[-1][1] == GRUPPO and "corretta" in bot.inviati[-1][2]
+    assert r["ok"] and "corretta" in r["testo"], r
+    g = bot.inviati[-1]
+    assert g[1] == GRUPPO and "Prima:" in g[2] and " 6-1 " in g[2].split("Ora:")[1], g
     s = await stato(ADMIN)
     d0 = s["ultime"]["sfide"][0]
     assert d0["id"] == sid and (d0["va"], d0["vb"]) == (6, 1) and d0["modificata"] and d0["a"] == prima["a"]
     assert s["ultime"]["totale"] == 3
     r = await az(ADMIN, azione="modifica", id=1, va=1, vb=0)   # annullata
     assert not r["ok"] and "annullata" in r["errore"]
+
+    # correzione totale: giocatori e data, numero invariato
+    ieri = (ST._oggi() - timedelta(days=1)).isoformat()
+    r = await az(ADMIN, azione="modifica", id=sid, a=["Giovanni", "Matteo"], b=["Paolo", "Michele"], va=3, vb=2, data=ieri)
+    assert r["ok"], r
+    d0 = (await stato(ADMIN))["ultime"]["sfide"][0]
+    assert d0["id"] == sid and d0["a"] == ["Giovanni", "Matteo"] and (d0["va"], d0["vb"]) == (3, 2) and d0["data"] == ieri
+    r = await az(ADMIN, azione="modifica", id=sid, a=["Luca", "Luca"], b=["Paolo", "Michele"], va=3, vb=2)
+    assert not r["ok"] and "due volte" in r["errore"]
+    r = await az(ADMIN, azione="modifica", id=sid, data=(ST._oggi() + timedelta(days=1)).isoformat())
+    assert not r["ok"] and "futuro" in r["errore"]
+    # nome nuovo nella correzione: stessa domanda soprannome/nuovo, poi salva
+    r = await az(ADMIN, azione="modifica", id=sid, a=["Zeno", "Matteo"], b=["Paolo", "Michele"], va=3, vb=2)
+    assert not r["ok"] and r["sconosciuti"][0]["nome"] == "Zeno"
+    r = await az(ADMIN, azione="modifica", id=sid, a=["Zeno", "Matteo"], b=["Paolo", "Michele"], va=3, vb=2, scelte={"zeno": "nuovo"})
+    assert r["ok"] and (await stato(ADMIN))["ultime"]["sfide"][0]["a"] == ["Zeno", "Matteo"]
+
+    # ---- inserita dall'admin per conto di un giocatore: con /sonoio lui può annullarla
+    r = await az(azione="salva", a=["Luca", "Matteo"], b=["Paolo", "Michele"], va=2, vb=0, per=0)
+    assert not r["ok"] and "Solo un admin" in r["errore"]
+    r = await az(ADMIN, azione="salva", a=["Luca", "Matteo"], b=["Paolo", "Michele"], va=2, vb=0, per=0)
+    assert r["ok"] and "per Luca" in r["testo"] and "per Luca" in bot.inviati[-1][2], r
+    nid = r["numero"]
+    c = db_connect()
+    c.execute("INSERT INTO giocatori_telegram (giocatore_id, user_id, collegato_il) VALUES (?, ?, 'x')",
+              (ST.cerca_giocatore(c, "Luca")[0], ALTRO)); c.commit()
+    s = await stato(ALTRO)
+    x = [y for y in s["ultime"]["sfide"] if y["id"] == nid][0]
+    assert x["per"] == "Luca" and x["per_uid"] == ALTRO
+    r = await az(ALTRO, azione="annulla", id=nid)
+    assert r["ok"], r
+    # comando: logica di modifica_sfida con soli parametri del risultato
+    ok, t, anni, _ = ST.modifica_sfida(db_connect(), sid, va=1, vb=1, user_id=ADMIN, admin=True)
+    assert ok and anni == [int(ieri[:4])]
 
     # ---- paginazione, anni, medagliere
     vecchio = (datetime.now() - timedelta(hours=1)).isoformat()
