@@ -198,6 +198,43 @@ async def main():
     assert not r["ok"]
     assert [t["id"] for t in (await stato())["storico"]["tornei"]] == [s["attivo"]["id"]]
 
+    # ---- riordino numeri: anteprima, blocchi, backup obbligatorio, rinumera tutto
+    from datetime import datetime as DT
+    import servizio
+    c = db_connect()
+    for nome in ("T3", "T4"):
+        assert L.apri_nuovo_torneo(c, nome).ok
+    att = c.execute("SELECT id FROM tornei WHERE chiuso = 0").fetchone()[0]
+    c.execute("INSERT INTO squadre (torneo_id, user_id, nome_squadra, iscritto_il) VALUES (?, 1, 'A-B', 'x')", (att,))
+    c.execute("INSERT INTO app_storia (torneo_id, stato, proposte, utenti, azione, quando) VALUES (?, '{}', '{}', '{}', 'x', 'x')", (att,))
+    c.commit()
+    vecchi = [r[0] for r in c.execute("SELECT id FROM tornei ORDER BY id")]
+    assert vecchi != list(range(1, len(vecchi) + 1)), vecchi
+    _, r = await az(azione="riordina_esamina")
+    assert r["ok"] and f"#{att} → #{len(vecchi)}" in r["testo"], r
+    assert L.blocco_riordino(c, DT(2026, 11, 27, 21)) and L.blocco_riordino(c, DT(2026, 11, 28, 4))
+    assert L.blocco_riordino(c, DT(2026, 11, 24, 21)) is None
+    servizio._db_connect, servizio._db_path = db_connect, os.environ["DB_PATH"]
+    _, r = await az(azione="riordina")   # canale backup non collegato: non si tocca nulla
+    assert not r["ok"] and "Backup" in r["errore"], r
+    assert [r[0] for r in db_connect().execute("SELECT id FROM tornei ORDER BY id")] == vecchi
+    servizio._scrivi(db_connect(), servizio.CHIAVE_CANALE, "-100999")
+    docs = len([x for x in bot.inviati if x[0] == "doc"])
+    _, r = await az(azione="riordina")
+    assert r["ok"] and "rinumerati" in r["testo"], r
+    assert len([x for x in bot.inviati if x[0] == "doc"]) == docs + 1   # backup prima
+    c = db_connect()
+    assert [r[0] for r in c.execute("SELECT id FROM tornei ORDER BY id")] == list(range(1, len(vecchi) + 1))
+    nuovo = len(vecchi)
+    assert c.execute("SELECT torneo_id FROM squadre WHERE nome_squadra = 'A-B'").fetchone()[0] == nuovo
+    assert c.execute("SELECT COUNT(*) FROM app_storia WHERE torneo_id = ?", (nuovo,)).fetchone()[0] == 1
+    assert c.execute("SELECT id FROM tornei WHERE chiuso = 0").fetchone()[0] == nuovo
+    assert (await stato())["attivo"]["id"] == nuovo
+    assert L.apri_nuovo_torneo(c, "T5").ok
+    assert c.execute("SELECT MAX(id) FROM tornei").fetchone()[0] == nuovo + 1   # il prossimo segue
+    _, r = await az(azione="riordina_esamina")
+    assert not r["ok"] and "già in ordine" in r["errore"]
+
     await cli.close()
     print("test_pannello: tutto OK")
 

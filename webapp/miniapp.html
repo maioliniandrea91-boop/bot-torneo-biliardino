@@ -892,7 +892,15 @@ function vPStorico(){
   const st = P.storico;
   let h = `<section><h2>Tornei — pagina ${st.pagina}/${st.pagine} (${st.totale})</h2><div class="card">${st.tornei.map(t=>`<div class="row tap" onclick="pDettaglio(${t.id})"><span><b>#${t.id}</b> ${esc(t.nome)}${t.attivo?' <span class="pill live">attivo</span>':""}<br><span class="muted">${t.squadre} squadre${t.primo ? " · 🥇 " + esc(t.primo) : " · senza podio"}</span></span><span class="muted">›</span></div>`).join("")}</div>`;
   if (st.pagine > 1) h += `<div class="actions"><button class="b" onclick="pPag--;caricaPannello()" ${st.pagina<=1?"disabled":""}>‹ Più recenti</button><button class="b" onclick="pPag++;caricaPannello()" ${st.pagina>=st.pagine?"disabled":""}>Più vecchi ›</button></div>`;
+  h += `<div class="actions"><button class="b" onclick="pRiordina()">🔢 Riordina numeri</button></div>`;
   return h + "</section>";
+}
+/* riordino numeri tornei: anteprima vecchi → nuovi, conferma, backup sul canale, poi rinumera */
+async function pRiordina(){
+  const r = await pAzSilenziosa({azione:"riordina_esamina"});
+  if (!r) return;
+  if (!await chiedi(r.testo + "\n\nPrima viene fatto un backup sul canale. I messaggi già pubblicati restano con i numeri vecchi. Confermi?")) return;
+  pPag = 1; pAz({azione:"riordina"});
 }
 async function pDettaglio(id){
   const r = await pAzSilenziosa({azione:"dettaglio", id});

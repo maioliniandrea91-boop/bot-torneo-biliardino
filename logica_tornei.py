@@ -3,6 +3,7 @@
 Lo usano i comandi (/iscrivi, /rinomina, /storico, /podio, ...) e lo userà il
 pannello admin della Mini App: una sola logica, due ingressi. Ogni funzione che
 modifica qualcosa ritorna un Esito (ok + testo da mostrare + dati utili)."""
+import json
 import re
 import sqlite3
 import unicodedata
@@ -473,6 +474,79 @@ def elimina_torneo(conn, cercato: str) -> Esito:
         f"({n_squadre} squadre rimosse con lui). Gli altri tornei mantengono il loro numero.",
         esame.dati,
     )
+
+
+# ======================= RIORDINO NUMERI =======================
+# I numeri #N sono gli id dei tornei: di norma fissi (vedi elimina_torneo). Questo li
+# riporta a 1, 2, 3… in ordine di creazione, solo quando lo decide l'admin.
+TABELLE_TORNEO = (("squadre", "torneo_id"), ("app_tornei", "torneo_id"), ("app_messaggi", "torneo_id"),
+                  ("app_storia", "torneo_id"), ("locandine", "torneo_ref"))
+
+
+def piano_riordino(conn) -> list[tuple[int, int]]:
+    """[(vecchio, nuovo)] solo per i tornei che cambiano numero."""
+    ids = [r[0] for r in conn.execute("SELECT id FROM tornei ORDER BY id")]
+    return [(v, n) for n, v in enumerate(ids, 1) if v != n]
+
+
+def blocco_riordino(conn, adesso: datetime | None = None) -> str | None:
+    """Motivo per cui ora non si può riordinare (None = si può)."""
+    from zoneinfo import ZoneInfo
+    t = adesso or datetime.now(ZoneInfo("Europe/Rome"))
+    if (t.weekday() == 4 and t.hour >= 20) or (t.weekday() == 5 and t.hour < 5):
+        return "Non si riordina il venerdì sera (dalle 20 alle 5 del sabato): c'è il torneo."
+    try:
+        for (stato,) in conn.execute("SELECT stato FROM app_tornei WHERE torneo_id > 0"):
+            try:
+                fase = (json.loads(stato) or {}).get("fase")
+            except (ValueError, AttributeError):
+                fase = None
+            if fase in ("gironi", "ko"):
+                return "C'è un torneo in corso nell'app (gironi o fase finale): riordina a torneo finito."
+    except sqlite3.OperationalError:
+        pass
+    try:
+        if conn.execute("SELECT COUNT(*) FROM locandine WHERE stato = 'programmata'").fetchone()[0]:
+            return "C'è una locandina programmata in attesa: pubblicala o annullala, poi riordina."
+    except sqlite3.OperationalError:
+        pass
+    return None
+
+
+def esamina_riordino(conn) -> Esito:
+    blocco = blocco_riordino(conn)
+    if blocco:
+        return _errore(blocco)
+    piano = piano_riordino(conn)
+    if not piano:
+        return _errore("I numeri sono già in ordine (1, 2, 3…): niente da riordinare.")
+    testo = "🔢 Nuovi numeri dei tornei:\n" + "\n".join(f"#{v} → #{n}" for v, n in piano)
+    return Esito(True, testo, {"piano": piano})
+
+
+def riordina_tornei(conn) -> Esito:
+    """Rinumera tutto in una sola transazione (se qualcosa va storto non cambia nulla)."""
+    esame = esamina_riordino(conn)
+    if not esame.ok:
+        return esame
+    piano = esame.dati["piano"]
+    tabelle = [(t, c) for t, c in TABELLE_TORNEO
+               if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()]
+    try:   # nessun commit fino alla fine: un errore annulla tutto
+        for fase in (0, 1):   # prima a negativo (-1000-vecchio), poi al numero nuovo: niente scontri
+            for v, n in piano:
+                da, a = (v, -1000 - v) if fase == 0 else (-1000 - v, n)
+                conn.execute("UPDATE tornei SET id = ? WHERE id = ?", (a, da))
+                for t, c in tabelle:
+                    conn.execute(f"UPDATE {t} SET {c} = ? WHERE {c} = ?", (a, da))
+        massimo = conn.execute("SELECT COALESCE(MAX(id), 0) FROM tornei").fetchone()[0]
+        conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'tornei'", (massimo,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return _errore(f"Riordino non riuscito, nulla è cambiato ({e}).")
+    return Esito(True, f"🔢 Numeri riordinati: {len(piano)} tornei rinumerati, il prossimo sarà #{massimo + 1}.",
+                 {"piano": piano})
 
 
 # ======================= PODIO =======================

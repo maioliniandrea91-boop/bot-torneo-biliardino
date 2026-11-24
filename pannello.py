@@ -192,6 +192,25 @@ async def h_azione(req):
             testo = testo.split("\nPer confermare:")[0]
         return _json(True, testo)
 
+    if az == "riordina_esamina":
+        esito = L.esamina_riordino(conn)
+        return _json(esito.ok, esito.testo)
+
+    if az == "riordina":
+        if not L.esamina_riordino(conn).ok:
+            return _json(False, L.esamina_riordino(conn).testo)
+        bot = req.app.get("bot")
+        try:   # backup prima di toccare i numeri: senza backup non si procede
+            import servizio
+            backup = await servizio.esegui_backup(bot, forzato=True, nota="🔢 prima del riordino dei numeri tornei") \
+                if bot is not None else "nessun bot"
+        except Exception as e:
+            return _json(False, f"Backup non riuscito ({e}): riordino annullato.")
+        if backup != "inviato":
+            return _json(False, f"Backup non inviato ({backup}): riordino annullato. Collega il canale con /backup.")
+        esito = L.riordina_tornei(conn)
+        return _json(esito.ok, esito.testo)
+
     return _json(False, "Azione sconosciuta", 400)
 
 
