@@ -63,7 +63,7 @@ def _proposta_podio(conn, torneo_id: int) -> int:
     return prec[0] if prec else torneo_id
 
 
-def stato_pannello(conn, pagina: int = 1) -> dict:
+def stato_pannello(conn, pagina: int = 1, cerca: str = "") -> dict:
     tid, nome = get_torneo_attivo(conn)
     squadre = [n for _, n in L.squadre_torneo(conn, tid)]
     massimo = max_coppie(conn, tid)
@@ -74,6 +74,7 @@ def stato_pannello(conn, pagina: int = 1) -> dict:
                    "conferma": L.riga_conferma(conn, len(squadre), massimo)},
         "giocatori": giocatori,
         "storico": L.pagina_tornei(conn, pagina),
+        "storico_ricerca": statistiche.tornei_giocatore(conn, cerca) if cerca.strip() else None,
         "podio_proposto": _proposta_podio(conn, tid),
         "gruppo": chat_gruppo_registrato(conn) is not None,
         "limiti": {"min": L.LIMITE_COPPIE_MIN, "max": L.LIMITE_COPPIE_MAX},
@@ -86,7 +87,8 @@ async def h_stato(req):
         pagina = int(req.query.get("pagina", "1"))
     except ValueError:
         pagina = 1
-    return web.json_response(stato_pannello(_db(), pagina), headers={"Cache-Control": "no-store"})
+    return web.json_response(stato_pannello(_db(), pagina, req.query.get("cerca", "")[:60]),
+                             headers={"Cache-Control": "no-store"})
 
 
 # ======================= AZIONI =======================

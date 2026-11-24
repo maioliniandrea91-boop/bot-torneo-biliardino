@@ -194,6 +194,14 @@ async def main():
                                (tid,)).fetchone()
     assert row[0] == "Ugo-Rino" and row[1] == "Corretto il 2° posto" and row[2].startswith("FOTO") and row[3] != msg_vecchio
 
+    # ---- storico per giocatore: tornei, compagno, piazzamento e medaglie
+    r = await (await cli.get("/api/pannello?cerca=pinna", headers=H)).json()
+    sr = r["storico_ricerca"]
+    assert sr["nomi"] == ["Pinna"] and sr["tornei"][0]["id"] == tid, sr
+    assert sr["tornei"][0]["compagno"] == "Gianni" and sr["tornei"][0]["pos"] == 0 and sr["medaglie"][0] == 1, sr
+    assert (await stato())["storico_ricerca"] is None
+    assert (await (await cli.get("/api/pannello?cerca=zzz", headers=H)).json())["storico_ricerca"]["nomi"] == []
+
     # ---- nuovo torneo vuoto: il podio propone il precedente
     import logica_tornei as L
     assert L.apri_nuovo_torneo(db_connect(), "Venerdì 21/11").ok

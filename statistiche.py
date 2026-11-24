@@ -407,6 +407,45 @@ def _ids_cercati(conn, cercato: str) -> list[int]:
         "SELECT giocatore_id FROM giocatori_alias WHERE alias LIKE ?", (simile, simile))})
 
 
+def tornei_giocatore(conn, cercato: str) -> dict:
+    """Storico per giocatore: tornei in cui era iscritto (con compagno e piazzamento) e medaglie.
+    Stessa ricerca delle sfide (nome, soprannome o parte del nome)."""
+    ids = _ids_cercati(conn, cercato)
+    nomi = [r[0] for r in conn.execute(
+        f"SELECT nome FROM giocatori WHERE id IN ({','.join('?' * len(ids)) or 'NULL'}) ORDER BY nome", ids)]
+    esito = {"nomi": nomi, "tornei": [], "medaglie": [0, 0, 0]}
+    if len(nomi) != 1:   # nessuno o più giocatori: prima va scelto quello giusto
+        return esito
+    io = nomi[0]
+    canonico = {}
+
+    def can(n):
+        if n not in canonico:
+            canonico[n] = nome_canonico(conn, n)
+        return canonico[n]
+
+    for tid, nome, chiuso, p1, p2, p3, flag in conn.execute(
+            "SELECT id, nome, chiuso, podio_primo, podio_secondo, podio_terzo, escluso_medagliere "
+            "FROM tornei ORDER BY id DESC"):
+        podio = [p1, p2, p3]
+        squadre = [r[0] for r in conn.execute("SELECT nome_squadra FROM squadre WHERE torneo_id = ?", (tid,))]
+        for sq in podio:   # i podi vecchi possono non avere le squadre iscritte nel bot
+            if sq and sq not in squadre:
+                squadre.append(sq)
+        for sq in squadre:
+            coppia = dividi_coppia(sq)
+            if not coppia or io not in (can(coppia[0]), can(coppia[1])):
+                continue
+            compagno = coppia[1] if can(coppia[0]) == io else coppia[0]
+            pos = next((i for i, p in enumerate(podio) if p and p.lower() == sq.lower()), None)
+            if pos is not None and not torneo_escluso(nome, flag):
+                esito["medaglie"][pos] += 1
+            esito["tornei"].append({"id": tid, "nome": nome, "attivo": not chiuso, "squadra": sq,
+                                    "compagno": can(compagno), "pos": pos})
+            break
+    return esito
+
+
 def pagina_sfide(conn, pagina: int = 1, per_pagina: int = 20, giocatore: str = "") -> dict:
     """Ultime sfide (più recenti prima). Con giocatore: solo quelle a cui ha partecipato
     (nome, soprannome o parte del nome), più il suo bilancio."""
