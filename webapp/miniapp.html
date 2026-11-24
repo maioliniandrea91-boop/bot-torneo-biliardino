@@ -1196,7 +1196,7 @@ function vSfUltime(){
     <datalist id="dlSfG">${SF.giocatori.map(g=>`<option value="${esc(g.nome)}">`).join("")}</datalist>
     ${r ? (r.nomi.length === 0 ? '<p class="muted" style="margin:6px 2px 0">Nessun giocatore con questo nome.</p>'
       : r.nomi.length > 1 ? `<p class="muted" style="margin:6px 2px 0">Trovati più giocatori: ${esc(r.nomi.join(", "))}. Scegline uno dall'elenco per il bilancio.</p>`
-      : `<p style="margin:6px 2px 0"><b>${esc(r.nomi[0])}</b>: ${r.sfide} sfide · ✅ ${r.vinte} vinte · ❌ ${r.perse} perse${r.pari ? ` · ${r.pari} pari` : ""}<br><span class="muted">partite ${r.pv}-${r.pp}</span></p>`) : ""}
+      : `<p style="margin:6px 2px 0"><b>${esc(r.nomi[0])}</b>: ${r.pv + r.pp} partite · ✅ ${r.pv} vinte · ❌ ${r.pp} perse${r.pv + r.pp ? ` · <b>${Math.round(100 * r.pv / (r.pv + r.pp))}%</b>` : ""}<br><span class="muted">${r.sfide} sfide: ${r.vinte} vinte · ${r.perse} perse${r.pari ? ` · ${r.pari} pari` : ""}</span></p>`) : ""}
   </div></section>`;
   if (!u.totale) return h + `<div class="empty">${r ? "Nessuna sfida trovata." : "Nessuna sfida registrata."}</div>`;
   h += `<section><h2>${r ? "Sfide trovate" : "Ultime sfide"} — pagina ${u.pagina}/${u.pagine} (${u.totale})</h2>${u.sfide.map(s=>{
