@@ -1062,15 +1062,17 @@ async function podPubblica(){
 }
 
 /* ---------- scheda Sfide (tutti i membri) ---------- */
-let SF = null, sfSub = "nuova", sfPag = 1, sfAnno = null, sfMed = "", sfB = {g:["","","",""], va:0, vb:0, data:"", scelte:{}, mod:null, per:null};
+let SF = null, sfSub = "nuova", sfPag = 1, sfAnno = null, sfMed = "", sfCerca = "", sfCercaT = null, sfB = {g:["","","",""], va:0, vb:0, data:"", scelte:{}, mod:null, per:null};
 async function caricaSfide(){
   try{
-    const q = new URLSearchParams({pagina: sfPag, anno: sfAnno || "", med: sfMed});
+    const q = new URLSearchParams({pagina: sfPag, anno: sfAnno || "", med: sfMed, cerca: sfCerca});
     const r = await fetch("/api/sfide?" + q, {headers:{"X-Init-Data":INIT}});
     const d = await r.json();
     if (!r.ok){ toast(d.errore || "Errore", true); return; }
     SF = d; sfPag = d.ultime.pagina; sfAnno = d.classifica.anno;
+    const scrive = document.activeElement && document.activeElement.id === "sfCercaIn";
     if (tab === "sfide" && !foglioAperto) render();
+    if (scrive) { const i = $("#sfCercaIn"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
   }catch(e){ toast("Connessione assente", true); }
 }
 async function sfPost(dati){
@@ -1168,10 +1170,24 @@ function sfChiedi(lista, k){
 let sfCoda = [], sfK = 0;
 function sfScelta(chiave, valore){ sfB.scelte[chiave] = valore; sfChiedi(sfCoda, sfK + 1); }
 /* ultime sfide, classifica, medagliere */
+function sfRicerca(v, subito){   // ricerca per giocatore: aspetta che smetta di scrivere
+  sfCerca = v; sfPag = 1;
+  clearTimeout(sfCercaT);
+  sfCercaT = setTimeout(caricaSfide, subito ? 0 : 400);
+}
 function vSfUltime(){
-  const u = SF.ultime;
-  if (!u.totale) return '<div class="empty">Nessuna sfida registrata.</div>';
-  let h = `<section><h2>Ultime sfide — pagina ${u.pagina}/${u.pagine} (${u.totale})</h2>${u.sfide.map(s=>{
+  const u = SF.ultime, r = u.ricerca;
+  let h = `<section><div class="card"><div class="duo">
+    <input class="t" id="sfCercaIn" list="dlSfG" placeholder="🔍 Cerca giocatore" value="${esc(sfCerca)}" oninput="sfRicerca(this.value)" autocomplete="off">
+    ${SF.io ? `<button class="b" onclick="sfRicerca(${jsq(SF.io)}, true)">👤 Le mie</button>` : ""}
+    ${sfCerca ? `<button class="b" onclick="sfRicerca('', true)">✕</button>` : ""}</div>
+    <datalist id="dlSfG">${SF.giocatori.map(g=>`<option value="${esc(g.nome)}">`).join("")}</datalist>
+    ${r ? (r.nomi.length === 0 ? '<p class="muted" style="margin:6px 2px 0">Nessun giocatore con questo nome.</p>'
+      : r.nomi.length > 1 ? `<p class="muted" style="margin:6px 2px 0">Trovati più giocatori: ${esc(r.nomi.join(", "))}. Scegline uno dall'elenco per il bilancio.</p>`
+      : `<p style="margin:6px 2px 0"><b>${esc(r.nomi[0])}</b>: ${r.sfide} sfide · ✅ ${r.vinte} vinte · ❌ ${r.perse} perse${r.pari ? ` · ${r.pari} pari` : ""}<br><span class="muted">partite ${r.pv}-${r.pp}</span></p>`) : ""}
+  </div></section>`;
+  if (!u.totale) return h + `<div class="empty">${r ? "Nessuna sfida trovata." : "Nessuna sfida registrata."}</div>`;
+  h += `<section><h2>${r ? "Sfide trovate" : "Ultime sfide"} — pagina ${u.pagina}/${u.pagine} (${u.totale})</h2>${u.sfide.map(s=>{
     const wa = s.va > s.vb, wb = s.vb > s.va, puo = SF.admin || s.da === SF.uid || (s.per_uid && s.per_uid === SF.uid);
     return `<div class="card"><div class="muted" style="display:flex;justify-content:space-between"><span>n° ${s.id} · ${s.data.slice(8,10)}/${s.data.slice(5,7)}/${s.data.slice(0,4)}${s.per ? " · per " + esc(s.per) : ""}${s.modificata ? " · ✏️ corretta" : ""}</span><span>${SF.admin ? `<button class="b" style="padding:2px 8px" onclick="sfApriModifica(${s.id})">✏️</button> ` : ""}${puo ? `<button class="b red" style="padding:2px 8px" onclick="sfAnnulla(${s.id})">🗑</button>` : ""}</span></div>
       <div class="sfida-r" style="margin-top:4px"><span class="team ${wa?"win":wb?"lose":""}">${esc(s.a.join("-"))}</span><span class="x">${s.va}-${s.vb}</span><span class="team dx ${wb?"win":wa?"lose":""}">${esc(s.b.join("-"))}</span></div></div>`;

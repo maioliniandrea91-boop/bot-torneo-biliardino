@@ -393,20 +393,55 @@ def modifica_sfida(conn, sid: int, a=None, b=None, va: int | None = None, vb: in
     return True, testo, anni, nuovi
 
 
-def pagina_sfide(conn, pagina: int = 1, per_pagina: int = 20) -> dict:
+def _ids_cercati(conn, cercato: str) -> list[int]:
+    """Giocatori per la ricerca nelle sfide: nome o soprannome esatto, altrimenti parte del nome."""
+    cercato = " ".join((cercato or "").split())
+    if not cercato:
+        return []
+    esatto = cerca_giocatore(conn, cercato)
+    if esatto:
+        return [esatto[0]]
+    simile = f"%{cercato.lower()}%"
+    return sorted({r[0] for r in conn.execute(
+        "SELECT id FROM giocatori WHERE LOWER(nome) LIKE ? UNION "
+        "SELECT giocatore_id FROM giocatori_alias WHERE alias LIKE ?", (simile, simile))})
+
+
+def pagina_sfide(conn, pagina: int = 1, per_pagina: int = 20, giocatore: str = "") -> dict:
+    """Ultime sfide (più recenti prima). Con giocatore: solo quelle a cui ha partecipato
+    (nome, soprannome o parte del nome), più il suo bilancio."""
     nomi = dict(conn.execute("SELECT id, nome FROM giocatori").fetchall())
-    totale = conn.execute("SELECT COUNT(*) FROM sfide WHERE annullata = 0").fetchone()[0]
+    filtro, par = "", []
+    ids = _ids_cercati(conn, giocatore) if giocatore.strip() else None
+    if ids is not None:
+        segni = ",".join("?" * len(ids)) or "NULL"
+        filtro = f" AND (s.a1 IN ({segni}) OR s.a2 IN ({segni}) OR s.b1 IN ({segni}) OR s.b2 IN ({segni}))"
+        par = ids * 4
+    totale = conn.execute(f"SELECT COUNT(*) FROM sfide s WHERE s.annullata = 0{filtro}", par).fetchone()[0]
     pagine = max(1, -(-totale // per_pagina))
     pagina = min(max(1, pagina), pagine)
     rows = conn.execute(
         "SELECT s.id, s.data, s.a1, s.a2, s.b1, s.b2, s.vinte_a, s.vinte_b, s.inserita_da, s.modificata_il, "
         "s.per_conto, t.user_id FROM sfide s LEFT JOIN giocatori_telegram t ON t.giocatore_id = s.per_conto "
-        "WHERE s.annullata = 0 ORDER BY s.id DESC LIMIT ? OFFSET ?", (per_pagina, (pagina - 1) * per_pagina)).fetchall()
-    return {"pagina": pagina, "pagine": pagine, "totale": totale,
-            "sfide": [{"id": sid, "data": d, "a": [nomi[a1], nomi[a2]], "b": [nomi[b1], nomi[b2]],
-                       "va": va, "vb": vb, "da": da, "modificata": bool(mod),
-                       "per": nomi.get(per), "per_uid": per_uid}
-                      for sid, d, a1, a2, b1, b2, va, vb, da, mod, per, per_uid in rows]}
+        f"WHERE s.annullata = 0{filtro} ORDER BY s.id DESC LIMIT ? OFFSET ?",
+        (*par, per_pagina, (pagina - 1) * per_pagina)).fetchall()
+    esito = {"pagina": pagina, "pagine": pagine, "totale": totale,
+             "sfide": [{"id": sid, "data": d, "a": [nomi[a1], nomi[a2]], "b": [nomi[b1], nomi[b2]],
+                        "va": va, "vb": vb, "da": da, "modificata": bool(mod),
+                        "per": nomi.get(per), "per_uid": per_uid}
+                       for sid, d, a1, a2, b1, b2, va, vb, da, mod, per, per_uid in rows]}
+    if ids is not None:   # bilancio di tutte le sfide trovate (non solo della pagina)
+        b = {"nomi": [nomi[i] for i in ids], "sfide": totale, "vinte": 0, "perse": 0, "pari": 0, "pv": 0, "pp": 0}
+        if len(ids) == 1:   # con più giocatori trovati il bilancio non ha senso
+            g = ids[0]
+            for a1, a2, b1, b2, va, vb in conn.execute(
+                    f"SELECT s.a1, s.a2, s.b1, s.b2, s.vinte_a, s.vinte_b FROM sfide s WHERE s.annullata = 0{filtro}", par):
+                mie, loro = (va, vb) if g in (a1, a2) else (vb, va)
+                b["pv"] += mie
+                b["pp"] += loro
+                b["vinte" if mie > loro else "perse" if mie < loro else "pari"] += 1
+        esito["ricerca"] = b
+    return esito
 
 
 def anni_con_dati(conn) -> list[int]:

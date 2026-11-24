@@ -240,6 +240,20 @@ async def main():
     assert ST.aggiungi_soprannome(c, "Luca", gid)   # già in anagrafica: errore
     assert ST.aggiungi_soprannome(c, "Nanni", 9999)  # giocatore inesistente: errore
 
+    # ---- ricerca per giocatore nelle Ultime (per tutti): solo le sue sfide + bilancio
+    c = db_connect()
+    luca = ST.cerca_giocatore(c, "luca")[0]
+    attese = c.execute("SELECT COUNT(*) FROM sfide WHERE annullata = 0 AND ? IN (a1, a2, b1, b2)", (luca,)).fetchone()[0]
+    s = await stato(q="?cerca=LUCA")
+    r = s["ultime"]["ricerca"]
+    assert r["nomi"] == ["Luca"] and s["ultime"]["totale"] == r["sfide"] == attese > 0, r
+    assert r["vinte"] + r["perse"] + r["pari"] == attese
+    assert all("Luca" in x["a"] + x["b"] for x in s["ultime"]["sfide"])
+    assert (await stato(q="?cerca=zzz"))["ultime"]["totale"] == 0
+    parte = (await stato(q="?cerca=mi"))["ultime"]["ricerca"]   # parte del nome: Michele, ...
+    assert "Michele" in parte["nomi"]
+    assert "ricerca" not in (await stato())["ultime"] and (await stato())["io"] is None
+
     await cli.close()
     print("test_sfide: tutto OK")
 

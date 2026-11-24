@@ -52,14 +52,18 @@ def _db():
 
 # ======================= LETTURA =======================
 
-def stato_sfide(conn, uid: int, pagina: int = 1, anno: int | None = None, med: str = "") -> dict:
+def stato_sfide(conn, uid: int, pagina: int = 1, anno: int | None = None, med: str = "",
+                cerca: str = "") -> dict:
     oggi = ST._oggi()
     anno = anno or oggi.year
     anno_med = None if med == "sempre" else (int(med) if med.isdigit() else oggi.year)
     righe_med, contati, _ = ST.calcola_medagliere(conn, anno_med)
     return {
         "giocatori": ST.giocatori_per_uso(conn),
-        "ultime": ST.pagina_sfide(conn, pagina),
+        "ultime": ST.pagina_sfide(conn, pagina, giocatore=cerca),
+        "io": (lambda r: r[0] if r else None)(conn.execute(   # giocatore collegato con /sonoio («Le mie»)
+            "SELECT g.nome FROM giocatori_telegram t JOIN giocatori g ON g.id = t.giocatore_id WHERE t.user_id = ?",
+            (uid,)).fetchone()),
         "classifica": {"anno": anno, "righe": [
             {"nome": r["nome"], "elo": round(r["elo"]), "g": r["g"], "v": r["v"], "perc": round(r["perc"])}
             for r in ST.calcola_classifica(conn, anno)]},
@@ -81,7 +85,7 @@ async def h_stato(req):
         anno = int(q["anno"]) if q.get("anno") else None
     except ValueError:
         pagina, anno = 1, None
-    return web.json_response(stato_sfide(_db(), uid, pagina, anno, q.get("med", "")),
+    return web.json_response(stato_sfide(_db(), uid, pagina, anno, q.get("med", ""), q.get("cerca", "")[:60]),
                              headers={"Cache-Control": "no-store"})
 
 
