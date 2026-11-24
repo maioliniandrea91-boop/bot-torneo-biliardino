@@ -442,15 +442,17 @@ async def scenario():
     await cmd("/podio Antonio-Eva | Luca-Matteo | Pio-Pia", chat=GRUPPO)
     controlla("non ha squadre iscritte" in ultimi_testi()[0], "/podio blocco torneo attivo vuoto")
     await cmd("/iscrivi Ugo-Ivo", uid=UTENTE, chat=GRUPPO)
+    controlla(any(v.get("metodo") == "edit_message_caption" and "Iscritte 1/14" in (v.get("caption") or "")
+                  for v in REG.voci[-6:]), "/iscrivi aggiorna la riga iscritte della locandina nel gruppo")
     await cmd("/ripubblica")      # locandina + lista squadre di nuovo sotto
     controlla(any("1. Ugo-Ivo" in (t or "") for t in ultimi_testi(3)), "/ripubblica rimette la lista")
     controlla(any("Iscritte 1/14" in (t or "") for t in ultimi_testi(3)), "/ripubblica usa il massimo del torneo")
     await cmd("/squadre", chat=GRUPPO)
-    controlla("Totale: 1/14" in ultimi_testi()[0], "/squadre con massimo 14")
+    controlla(any("Totale: 1/14" in t for t in ultimi_testi(2)), "/squadre con massimo 14")
     await cmd("/maxcoppie", chat=GRUPPO)
     controlla("Massimo coppie di «20/12 5X Volo»: 14 (iscritte 1)" in ultimi_testi()[0], "/maxcoppie senza numero")
     await cmd("/maxcoppie 4")
-    controlla("14 → 4" in ultimi_testi(2)[0] and "soglia di conferma (5)" in ultimi_testi(2)[0],
+    controlla("14 → 4" in ultimi_testi(3)[0] and "soglia di conferma (5)" in ultimi_testi(3)[0],
               "/maxcoppie sotto la soglia")
     controlla(any(v.get("metodo") == "edit_message_text" and "Totale: 1/4" in (v.get("text") or "")
                   for v in REG.voci[-3:]), "/maxcoppie corregge la lista nel gruppo")

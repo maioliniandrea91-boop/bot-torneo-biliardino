@@ -109,7 +109,8 @@ def _crea_tabella(conn):
                        ("prossimo_repost", "TEXT"),
                        ("max_coppie", "INTEGER"),                        # NULL = predefinito
                        ("dati", "TEXT"),                                 # dati del modulo (JSON), per rivederla/modificarla
-                       ("sostituisce", "INTEGER")):                      # correzione di una locandina programmata/pubblicata
+                       ("sostituisce", "INTEGER"),                       # correzione di una locandina programmata/pubblicata
+                       ("avviso_post", "TEXT")):                         # «🔄 Locandina aggiornata…» in testa al post attuale
         if nome not in colonne:
             conn.execute(f"ALTER TABLE locandine ADD COLUMN {nome} {tipo}")
     # data di gioco salvata anche nei tornei, per sapere se un torneo è già stato giocato
@@ -483,7 +484,7 @@ async def ripubblica_locandina(bot, job_queue, numero: int | None = None, con_48
         nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=testo, **_bottone(bot))
     except Exception as e:
         return f"❌ Locandina n° {lid} NON ripubblicata: errore Telegram ({e})."
-    conn.execute("UPDATE locandine SET msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
+    conn.execute("UPDATE locandine SET msg_gruppo = ?, torneo_ref = ?, avviso_post = NULL WHERE id = ?",
                  (nuovo.message_id, torneo_ref, lid))
     conn.commit()
     await _cancella_post_vecchi(bot, conn, gruppo, nuovo.message_id, msg_vecchio)
@@ -745,6 +746,36 @@ async def _iscritte(conn, torneo_ref) -> int:
     return conn.execute("SELECT COUNT(*) FROM squadre WHERE torneo_id = ?", (torneo_ref,)).fetchone()[0]
 
 
+async def aggiorna_posti_locandina(bot, conn, chat_id: int):
+    """Dopo ogni cambio della lista squadre: corregge in silenzio la riga
+    «Iscritte X/max» (e «✅ Torneo confermato») della locandina già nel gruppo,
+    così locandina e lista dicono sempre la stessa cosa. Modificare la didascalia
+    non ha il limite delle 48 ore. Se il post non c'è più o è uguale, pazienza."""
+    if _gruppo(conn) != chat_id:
+        return
+    att = _torneo_attivo(conn)
+    if not att:
+        return
+    row = conn.execute(
+        "SELECT didascalia, extra, msg_gruppo, avviso_post FROM locandine "
+        "WHERE stato = 'pubblicata' AND msg_gruppo IS NOT NULL AND torneo_ref = ? "
+        "ORDER BY id DESC LIMIT 1", (att[0],)
+    ).fetchone()
+    if not row:
+        return
+    didascalia, extra, msg_gruppo, avviso_post = row
+    testo = _testo_completo(didascalia, extra)
+    if avviso_post:
+        testo = f"{avviso_post}\n\n{testo}"
+    testo += f"\n\n{_riga_posti(await _iscritte(conn, att[0]), conn, att[0])}"
+    if len(testo) > LIMITE_DIDASCALIA:
+        return
+    try:
+        await bot.edit_message_caption(chat_id=chat_id, message_id=msg_gruppo, caption=testo, **_bottone(bot))
+    except Exception:
+        pass  # identica, cancellata a mano o non modificabile
+
+
 async def _avvisa_admin(bot, testo: str):
     for admin in _admin_ids:
         try:
@@ -800,7 +831,7 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
         _programma_repost(conn, jq, lid, adesso + timedelta(hours=1))
         await _avvisa_admin(bot, f"⚠️ Ripubblicazione n° {lid} non riuscita ({e}). Riprovo tra un'ora.")
         return
-    conn.execute("UPDATE locandine SET msg_gruppo = ? WHERE id = ?", (nuovo.message_id, lid))
+    conn.execute("UPDATE locandine SET msg_gruppo = ?, avviso_post = NULL WHERE id = ?", (nuovo.message_id, lid))
     conn.commit()
     await _cancella_post_vecchi(bot, conn, gruppo, nuovo.message_id, msg_vecchio)
     if _ripubblica_lista:  # lista squadre subito sotto la locandina, la vecchia sparisce
@@ -933,8 +964,8 @@ async def sostituisci_pubblicata(bot, job_queue, lid: int) -> str:
         return f"❌ Locandina n° {lid} NON pubblicata: errore Telegram ({e}). Il post vecchio è ancora lì."
     _ferma_repost(conn, job_queue, vid)
     conn.execute("UPDATE locandine SET stato = 'sostituita' WHERE id = ?", (vid,))
-    conn.execute("UPDATE locandine SET stato = 'pubblicata', msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
-                 (nuovo.message_id, torneo_ref, lid))
+    conn.execute("UPDATE locandine SET stato = 'pubblicata', msg_gruppo = ?, torneo_ref = ?, avviso_post = ? "
+                 "WHERE id = ?", (nuovo.message_id, torneo_ref, avviso, lid))
     conn.commit()
     await _cancella_post_vecchi(bot, conn, gruppo, nuovo.message_id, msg_vecchio)
     if del_attivo and _ripubblica_lista:
@@ -1174,13 +1205,15 @@ async def _modifica_pubblicata(bot, lid: int, testo: str) -> str:
     la didascalia del post nel gruppo. Le ripubblicazioni useranno il nuovo testo."""
     conn = _conn()
     row = conn.execute(
-        "SELECT didascalia, msg_gruppo, torneo_ref, stato FROM locandine WHERE id = ?", (lid,)
+        "SELECT didascalia, msg_gruppo, torneo_ref, stato, avviso_post FROM locandine WHERE id = ?", (lid,)
     ).fetchone()
     if not row or row[3] != "pubblicata":
         return f"La locandina n° {lid} non è pubblicata."
-    didascalia, msg_gruppo, torneo_ref, _ = row
+    didascalia, msg_gruppo, torneo_ref, _, avviso_post = row
     extra = None if testo.lower() == "nessuno" else testo
     completo = _testo_completo(didascalia, extra)
+    if avviso_post:
+        completo = f"{avviso_post}\n\n{completo}"
     # riga "Iscritte X/max" solo se il torneo della locandina è ancora quello attivo
     att = _torneo_attivo(conn)
     if torneo_ref and att and att[0] == torneo_ref:

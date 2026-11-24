@@ -58,6 +58,16 @@ async def sostituisci_lista(bot, conn, chat_id: int, testo: str):
         except Exception:
             pass  # già cancellata a mano o troppo vecchia (>48h): pazienza
     scrivi_stato(conn, chiave, str(nuovo.message_id))
+    await _allinea_locandina(bot, conn, chat_id)
+
+
+async def _allinea_locandina(bot, conn, chat_id: int):
+    """La locandina nel gruppo segue la lista: stessa riga «Iscritte X/max»."""
+    from comando_locandina import aggiorna_posti_locandina   # qui: evita giri di import
+    try:
+        await aggiorna_posti_locandina(bot, conn, chat_id)
+    except Exception:
+        pass
 
 
 async def pubblica_lista(update: Update, context: ContextTypes.DEFAULT_TYPE, conn,
@@ -95,6 +105,7 @@ async def aggiorna_lista_gruppo(bot, conn, chat_id: int):
     mandare un messaggio nuovo. Se non c'è o non si può modificare, pazienza."""
     msg_id = leggi_stato(conn, f"lista_msg_{chat_id}")
     torneo_id, nome_torneo = get_torneo_attivo(conn)
+    await _allinea_locandina(bot, conn, chat_id)   # es. /maxcoppie o soglia: cambia anche la locandina
     if msg_id is None or not conta_squadre(conn, torneo_id):
         return
     try:
