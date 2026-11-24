@@ -1089,7 +1089,7 @@ function vSfUltime(){
   if (!u.totale) return '<div class="empty">Nessuna sfida registrata.</div>';
   let h = `<section><h2>Ultime sfide — pagina ${u.pagina}/${u.pagine} (${u.totale})</h2>${u.sfide.map(s=>{
     const wa = s.va > s.vb, wb = s.vb > s.va, puo = SF.admin || s.da === SF.uid;
-    return `<div class="card"><div class="muted" style="display:flex;justify-content:space-between"><span>n° ${s.id} · ${s.data.slice(8,10)}/${s.data.slice(5,7)}/${s.data.slice(0,4)}</span>${puo ? `<button class="b red" style="padding:2px 8px" onclick="sfAnnulla(${s.id})">🗑</button>` : ""}</div>
+    return `<div class="card"><div class="muted" style="display:flex;justify-content:space-between"><span>n° ${s.id} · ${s.data.slice(8,10)}/${s.data.slice(5,7)}/${s.data.slice(0,4)}${s.modificata ? " · ✏️ corretta" : ""}</span><span>${SF.admin ? `<button class="b" style="padding:2px 8px" onclick="sfApriModifica(${s.id})">✏️</button> ` : ""}${puo ? `<button class="b red" style="padding:2px 8px" onclick="sfAnnulla(${s.id})">🗑</button>` : ""}</span></div>
       <div class="sfida-r" style="margin-top:4px"><span class="team ${wa?"win":wb?"lose":""}">${esc(s.a.join("-"))}</span><span class="x">${s.va}-${s.vb}</span><span class="team dx ${wb?"win":wa?"lose":""}">${esc(s.b.join("-"))}</span></div></div>`;
   }).join("")}`;
   if (u.pagine > 1) h += `<div class="actions"><button class="b" onclick="sfPag--;caricaSfide()" ${u.pagina<=1?"disabled":""}>‹ Più recenti</button><button class="b" onclick="sfPag++;caricaSfide()" ${u.pagina>=u.pagine?"disabled":""}>Più vecchie ›</button></div>`;
@@ -1098,6 +1098,32 @@ function vSfUltime(){
 async function sfAnnulla(id){
   if (!await chiedi(`Annullare la sfida n° ${id}?\nLa classifica aggiornata va nel gruppo.`)) return;
   const d = await sfPost({azione:"annulla", id});
+  if (!d) return;
+  if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return; }
+  vibra("success"); toast(d.testo); if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);
+  await caricaSfide();
+}
+/* correzione del risultato (solo admin): stessa sfida, cambia solo il punteggio */
+let sfMod = null;
+function sfApriModifica(id){
+  const s = SF.ultime.sfide.find(x => x.id === id); if (!s) return;
+  sfMod = {id, va:s.va, vb:s.vb, a:s.a.join("-"), b:s.b.join("-"), prima:`${s.va}-${s.vb}`};
+  sfDisegnaModifica();
+}
+function sfDisegnaModifica(){
+  const m = sfMod, step = (k, v) => `<div class="step"><button onclick="sfMod.${k}=Math.max(0,sfMod.${k}-1);sfDisegnaModifica()" ${v<=0?"disabled":""}>−</button><span>${v}</span><button onclick="sfMod.${k}=Math.min(99,sfMod.${k}+1);sfDisegnaModifica()">+</button></div>`;
+  const ok = m.va + m.vb > 0 && `${m.va}-${m.vb}` !== m.prima;
+  apriFoglio(`<div style="font-weight:700;margin-bottom:4px">✏️ Correggi sfida n° ${m.id}</div>
+    <p class="muted" style="margin:0 0 8px">Ora: ${m.prima}. Restano numero, data e giocatori.</p>
+    <div class="row"><span>${esc(m.a)}</span>${step("va", m.va)}</div>
+    <div class="row"><span>${esc(m.b)}</span>${step("vb", m.vb)}</div>
+    <div class="actions"><button class="b" onclick="chiudiFoglio()">Annulla</button><button class="b pri" onclick="sfModifica()" ${ok?"":"disabled"}>Salva ${m.va}-${m.vb}</button></div>
+    <p class="muted">La classifica aggiornata va in fondo al gruppo.</p>`);
+}
+async function sfModifica(){
+  const m = sfMod; if (!m) return;
+  chiudiFoglio();
+  const d = await sfPost({azione:"modifica", id:m.id, va:m.va, vb:m.vb});
   if (!d) return;
   if (!d.ok){ vibra("error"); toast(d.errore || "Errore", true); return; }
   vibra("success"); toast(d.testo); if (d.avviso) setTimeout(() => toast(d.avviso, true), 2700);

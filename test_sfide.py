@@ -160,6 +160,26 @@ async def main():
     s = await stato(ADMIN)
     assert s["admin"] and s["ultime"]["totale"] == 3
 
+    # ---- modifica del risultato: solo admin, stessa sfida, classifica nuova nel gruppo
+    sid = (await stato())["ultime"]["sfide"][0]["id"]
+    r = await az(azione="modifica", id=sid, va=4, vb=4)
+    assert not r["ok"] and "Solo un admin" in r["errore"]
+    for va, vb in ((0, 0), (100, 1)):
+        r = await az(ADMIN, azione="modifica", id=sid, va=va, vb=vb)
+        assert not r["ok"] and "non valido" in r["errore"], r
+    prima = (await stato())["ultime"]["sfide"][0]
+    r = await az(ADMIN, azione="modifica", id=sid, va=prima["va"], vb=prima["vb"])
+    assert not r["ok"] and "è già" in r["errore"]
+    r = await az(ADMIN, azione="modifica", id=sid, va=6, vb=1)
+    assert r["ok"] and f"{prima['va']}-{prima['vb']} → 6-1" in r["testo"], r
+    assert bot.inviati[-1][1] == GRUPPO and "corretta" in bot.inviati[-1][2]
+    s = await stato(ADMIN)
+    d0 = s["ultime"]["sfide"][0]
+    assert d0["id"] == sid and (d0["va"], d0["vb"]) == (6, 1) and d0["modificata"] and d0["a"] == prima["a"]
+    assert s["ultime"]["totale"] == 3
+    r = await az(ADMIN, azione="modifica", id=1, va=1, vb=0)   # annullata
+    assert not r["ok"] and "annullata" in r["errore"]
+
     # ---- paginazione, anni, medagliere
     vecchio = (datetime.now() - timedelta(hours=1)).isoformat()
     for _ in range(25):   # sfide uguali: ognuna "vecchia" di un'ora, sennò è un doppio invio

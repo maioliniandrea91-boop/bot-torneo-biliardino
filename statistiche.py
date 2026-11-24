@@ -22,6 +22,7 @@ SFIDINE (sempre 2 vs 2, si segna quante partite ha vinto ciascuna coppia)
   Pareggio ammesso. Chiunque può inserire, senza conferma.
   - /sfide               -> ultime sfide inserite, con il loro numero
   - /annullasfida N      -> annulla la sfida N (chi l'ha inserita o admin)
+  - /modificasfida N 5-3 -> (admin) corregge il risultato della sfida N
   - /classifica [anno]   -> classifica Elo dell'anno solare (default: anno
                             in corso). Elo partita per partita, 1000 a inizio
                             anno, K=32, forza coppia = media dei due.
@@ -96,6 +97,11 @@ def crea_tabelle(conn):
             collegato_il TEXT NOT NULL
         )
     """)
+    col_sfide = [r[1] for r in conn.execute("PRAGMA table_info(sfide)")]
+    if "modificata_da" not in col_sfide:
+        # ultima correzione del risultato (admin): chi e quando
+        conn.execute("ALTER TABLE sfide ADD COLUMN modificata_da INTEGER")
+        conn.execute("ALTER TABLE sfide ADD COLUMN modificata_il TEXT")
     colonne = [r[1] for r in conn.execute("PRAGMA table_info(tornei)")]
     if "escluso_medagliere" not in colonne:
         # NULL = automatico (5X escluso), 1 = escluso a mano, 0 = incluso a mano
@@ -310,17 +316,39 @@ def annulla_sfida(conn, sid: int, user_id: int, admin: bool):
     return True, f"🗑️ Sfida n° {sid} annullata.", int(row[2][:4])
 
 
+MAX_VINTE = 99
+
+
+def modifica_risultato(conn, sid: int, va: int, vb: int, user_id: int, admin: bool):
+    """Corregge il risultato di una sfida (solo admin): la sfida tiene numero, data e giocatori.
+    Elo e classifica si ricalcolano da soli. Ritorna (ok, testo, anno della sfida)."""
+    if not admin:
+        return False, "Solo un admin può modificare il risultato di una sfida.", None
+    if not (0 <= va <= MAX_VINTE and 0 <= vb <= MAX_VINTE) or va + vb == 0:
+        return False, "Risultato non valido (0-0 o numeri fuori misura).", None
+    row = conn.execute("SELECT annullata, data, vinte_a, vinte_b FROM sfide WHERE id = ?", (sid,)).fetchone()
+    if not row or row[0]:
+        return False, f"Sfida n° {sid} non trovata o annullata.", None
+    if (row[2], row[3]) == (va, vb):
+        return False, f"La sfida n° {sid} è già {va}-{vb}.", None
+    conn.execute("UPDATE sfide SET vinte_a = ?, vinte_b = ?, modificata_da = ?, modificata_il = ? WHERE id = ?",
+                 (va, vb, user_id, datetime.now().isoformat(), sid))
+    conn.commit()
+    return True, f"✏️ Sfida n° {sid} corretta: {row[2]}-{row[3]} → {va}-{vb}.", int(row[1][:4])
+
+
 def pagina_sfide(conn, pagina: int = 1, per_pagina: int = 20) -> dict:
     nomi = dict(conn.execute("SELECT id, nome FROM giocatori").fetchall())
     totale = conn.execute("SELECT COUNT(*) FROM sfide WHERE annullata = 0").fetchone()[0]
     pagine = max(1, -(-totale // per_pagina))
     pagina = min(max(1, pagina), pagine)
     rows = conn.execute(
-        "SELECT id, data, a1, a2, b1, b2, vinte_a, vinte_b, inserita_da FROM sfide WHERE annullata = 0 "
+        "SELECT id, data, a1, a2, b1, b2, vinte_a, vinte_b, inserita_da, modificata_il FROM sfide WHERE annullata = 0 "
         "ORDER BY id DESC LIMIT ? OFFSET ?", (per_pagina, (pagina - 1) * per_pagina)).fetchall()
     return {"pagina": pagina, "pagine": pagine, "totale": totale,
             "sfide": [{"id": sid, "data": d, "a": [nomi[a1], nomi[a2]], "b": [nomi[b1], nomi[b2]],
-                       "va": va, "vb": vb, "da": da} for sid, d, a1, a2, b1, b2, va, vb, da in rows]}
+                       "va": va, "vb": vb, "da": da, "modificata": bool(mod)}
+                      for sid, d, a1, a2, b1, b2, va, vb, da, mod in rows]}
 
 
 def anni_con_dati(conn) -> list[int]:
@@ -595,7 +623,7 @@ async def sfide(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dd = f"{d[8:10]}/{d[5:7]}"
             testo += (f"n° {sid} · {dd} — {escape(nomi[a1])}-{escape(nomi[a2])} "
                       f"<b>{va}-{vb}</b> {escape(nomi[b1])}-{escape(nomi[b2])}\n")
-        testo += "\nErrore? /annullasfida N"
+        testo += "\nErrore? /annullasfida N · admin: /modificasfida N 5-3"
     await _mostra(update, context, conn, "sfide_msg", testo[:MAX_MSG])
 
 
@@ -606,6 +634,23 @@ async def annullasfida(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     sid = int(context.args[0].lstrip("n°"))
     ok, testo, anno = annulla_sfida(conn, sid, update.effective_user.id, _is_admin(update.effective_user.id))
+    if not ok:
+        await _rispondi(update, context, testo)
+        return
+    await _mostra(update, context, conn, "classifica_msg", f"{testo}\n\n" + testo_classifica(conn, anno))
+
+
+async def modificasfida(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/modificasfida N 5-3 (admin): corregge il risultato senza annullare e reinserire."""
+    conn = _conn()
+    uso = "Uso: /modificasfida N 5-3 (il numero lo trovi in /sfide)"
+    a = context.args or []
+    m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", "".join(a[1:])) if len(a) >= 2 else None
+    if not a or not a[0].lstrip("n°").isdigit() or not m:
+        await _rispondi(update, context, uso)
+        return
+    ok, testo, anno = modifica_risultato(conn, int(a[0].lstrip("n°")), int(m[1]), int(m[2]),
+                                         update.effective_user.id, _is_admin(update.effective_user.id))
     if not ok:
         await _rispondi(update, context, testo)
         return
@@ -780,6 +825,7 @@ COMANDI_STATISTICHE = [
     ("sfida", "Segna una sfidina 2vs2 — /sfida Luca-Matteo Paolo-Michele 5-2 (più righe = più sfide)"),
     ("sfide", "Ultime sfidine inserite, con il loro numero"),
     ("annullasfida", "Annulla una sfidina inserita da te — /annullasfida N"),
+    ("modificasfida", "[admin] Corregge il risultato di una sfidina — /modificasfida N 5-3"),
     ("classifica", "Classifica sfidine dell'anno (Elo) — /classifica 2026 per un anno passato"),
     ("medagliere", "Medagliere tornei per giocatore — /medagliere sempre per il totale"),
     ("giocatori", "Elenco giocatori registrati"),
@@ -814,6 +860,7 @@ def registra(app, db_connect, is_admin, rispondi, cancella_comando):
     crea_tabelle(db_connect())
     for nome, funz in (
         ("sfida", sfida), ("sfide", sfide), ("annullasfida", annullasfida),
+        ("modificasfida", modificasfida),
         ("classifica", classifica), ("medagliere", medagliere), ("giocatori", giocatori),
         ("rinominagiocatore", rinominagiocatore), ("unisci", unisci), ("toglisoprannome", toglisoprannome),
         ("escluditorneo", escluditorneo), ("includitorneo", includitorneo),

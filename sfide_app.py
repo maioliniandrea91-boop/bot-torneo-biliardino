@@ -11,6 +11,7 @@ API (autenticazione Telegram come il resto della Mini App):
                     "data": "AAAA-MM-GG" (facoltativa),
                     "scelte": {"gio": "nuovo" | id_giocatore}}  (solo per i nomi nuovi)
                    {"azione": "annulla", "id": N}
+                   {"azione": "modifica", "id": N, "va": 5, "vb": 3}   (solo admin)
 
 Nomi non in anagrafica senza scelta: risponde {"ok": false, "sconosciuti": [...]}
 con i nomi simili, e la Mini App chiede «è un soprannome di…? / è nuovo».
@@ -31,7 +32,7 @@ _utente = None      # req -> dict utente (alza 401 se non valido)
 _is_admin = None
 _conn = None
 _admin_ids: set = set()
-MAX_VINTE = 99
+MAX_VINTE = ST.MAX_VINTE
 
 
 def _json(ok: bool, testo: str = "", status: int = 200, **dati):
@@ -209,6 +210,20 @@ async def _annulla(req, conn, uid: int, d: dict):
     return _json(True, testo, avviso=avviso)
 
 
+async def _modifica(req, conn, uid: int, d: dict):
+    try:
+        sid, va, vb = int(d.get("id")), int(d.get("va")), int(d.get("vb"))
+    except (TypeError, ValueError):
+        return _json(False, "Dati non validi.")
+    ok, testo, anno = ST.modifica_risultato(conn, sid, va, vb, uid, bool(_is_admin(uid)))
+    if not ok:
+        return _json(False, testo)
+    u = _utente(req)
+    chi = u.get("first_name") or u.get("username") or "?"
+    avviso = await _classifica_nel_gruppo(req, conn, f"{testo}\n📱 Dalla app — {chi}", anno)
+    return _json(True, testo, avviso=avviso)
+
+
 async def h_azione(req):
     uid = int(_utente(req)["id"])
     try:
@@ -221,6 +236,8 @@ async def h_azione(req):
         return await _salva(req, conn, uid, d)
     if az == "annulla":
         return await _annulla(req, conn, uid, d)
+    if az == "modifica":
+        return await _modifica(req, conn, uid, d)
     return _json(False, "Azione sconosciuta", 400)
 
 
