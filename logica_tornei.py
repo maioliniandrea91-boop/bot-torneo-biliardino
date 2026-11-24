@@ -16,6 +16,7 @@ from config import LIMITE_COPPIE_MAX, LIMITE_COPPIE_MIN, PER_PAGINA_STORICO
 from database import get_torneo_attivo, iscrizioni_aperte, max_coppie
 
 MAX_CAPTION = 1024  # limite Telegram per la didascalia di una foto
+RIGA_PODIO_AGGIORNATO = "🔄 Podio aggiornato"
 TESTO_ISCRIZIONI_CHIUSE = "Le iscrizioni sono chiuse. Contatta un admin."
 
 
@@ -604,6 +605,8 @@ def prepara_podio(conn, num_torneo: int | None, squadre: list[str], descrizione:
         )
     primo, secondo, terzo = squadre
     caption = f"🏆 Podio — {nome_torneo}\n\n🥇 {primo}\n🥈 {secondo}\n🥉 {terzo}"
+    if gia_podio:   # sostituzione: il post vecchio viene tolto, chi legge sa che è cambiato
+        caption = f"{RIGA_PODIO_AGGIORNATO}\n\n{caption}"
     if descrizione:
         caption += f"\n\n{descrizione}"
     if foto_file_id and len(caption) > MAX_CAPTION:
@@ -612,12 +615,12 @@ def prepara_podio(conn, num_torneo: int | None, squadre: list[str], descrizione:
             f"togli circa {len(caption) - MAX_CAPTION} caratteri e riprova."
         )
     dati = {"torneo_id": torneo_id, "primo": primo, "secondo": secondo, "terzo": terzo,
-            "foto": foto_file_id, "caption": caption}
+            "foto": foto_file_id, "caption": caption, "descrizione": descrizione or None}
     avviso = ""
     if gia_podio:
         avviso = (f"⚠️ Attenzione: il torneo #{torneo_id} «{nome_torneo}» ha già un podio "
                   f"(🥇 {gia_podio[0]} 🥈 {gia_podio[1]} 🥉 {gia_podio[2]}).\n"
-                  "Se pubblichi, viene sostituito (anche nel medagliere).")
+                  "Se pubblichi, viene sostituito (anche nel medagliere) e il post vecchio tolto dal gruppo.")
     return Esito(True, avviso, {"podio": dati, "nome_torneo": nome_torneo, "gia_podio": gia_podio})
 
 
@@ -630,6 +633,17 @@ def salva_podio(conn, dati: dict):
     )
     for sq in (dati["primo"], dati["secondo"], dati["terzo"]):
         statistiche.registra_coppia(conn, sq)
-    if dati["foto"]:
-        conn.execute("UPDATE tornei SET foto_file_id = ? WHERE id = ?", (dati["foto"], dati["torneo_id"]))
+    # foto, descrizione e post = quelli appena pubblicati (servono per rivederlo e sostituirlo)
+    conn.execute("UPDATE tornei SET foto_file_id = ?, podio_descrizione = ?, podio_msg = ? WHERE id = ?",
+                 (dati["foto"], dati.get("descrizione"), dati.get("msg"), dati["torneo_id"]))
     conn.commit()
+
+
+def podio_pubblicato(conn, torneo_id: int) -> dict | None:
+    """Podio salvato di un torneo (per la Mini App), o None."""
+    row = conn.execute("SELECT podio_primo, podio_secondo, podio_terzo, podio_descrizione, foto_file_id, podio_msg "
+                       "FROM tornei WHERE id = ?", (torneo_id,)).fetchone()
+    if not row or not row[0]:
+        return None
+    return {"primo": row[0], "secondo": row[1], "terzo": row[2], "descrizione": row[3] or "",
+            "foto": bool(row[4]), "nel_gruppo": bool(row[5])}

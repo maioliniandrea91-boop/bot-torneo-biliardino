@@ -15,6 +15,7 @@ import io
 
 from aiohttp import web
 
+import cmd_tornei
 import comando_locandina
 import logica_tornei as L
 import statistiche
@@ -180,7 +181,21 @@ async def h_azione(req):
         if not esito.ok:
             return _json(False, esito.testo)
         chiuso = conn.execute("SELECT chiuso FROM tornei WHERE id = ?", (esito.dati["id"],)).fetchone()[0]
-        return _json(True, "", torneo={**esito.dati, "attivo": not chiuso})
+        return _json(True, "", torneo={**esito.dati, "attivo": not chiuso,
+                                       "podio_pubblicato": L.podio_pubblicato(conn, esito.dati["id"])})
+
+    if az == "podio_file":   # foto del podio nella chat privata col bot (file originale)
+        bot = req.app.get("bot")
+        row = conn.execute("SELECT foto_file_id, nome FROM tornei WHERE id = ?", (int(d.get("id") or 0),)).fetchone()
+        if not row or not row[0] or bot is None:
+            return _json(False, "Questo podio non ha una foto.")
+        try:
+            dati = bytes(await (await bot.get_file(row[0])).download_as_bytearray())
+            nome = "podio_" + "".join(c if c.isalnum() else "_" for c in row[1]) + ".jpg"
+            await bot.send_document(chat_id=uid, document=dati, filename=nome, caption=f"Podio — {row[1]}")
+        except Exception as e:
+            return _json(False, f"Non riesco a mandartela in chat ({e}). Apri la chat col bot e premi Avvia.")
+        return _json(True, "📥 Foto del podio mandata nella chat col bot.")
 
     if az in ("elimina_esamina", "elimina"):
         cercato = f"#{int(d.get('id', 0))}"
@@ -236,12 +251,16 @@ async def h_podio(req):
         torneo_id = int(campi.get("torneo_id", ""))
     except ValueError:
         return _json(False, "Scegli il torneo.")
+    foto_tenuta = None   # Modifica: senza foto nuova si ripubblica quella già uscita
+    if foto is None and campi.get("tieni_foto") == "1":
+        row = conn.execute("SELECT foto_file_id FROM tornei WHERE id = ?", (torneo_id,)).fetchone()
+        foto_tenuta = row[0] if row else None
     squadre = [campi.get(k, "") for k in ("primo", "secondo", "terzo")]
     if not all(squadre):
         return _json(False, "Servono tutte e tre le squadre del podio.")
     squadre = [L.normalizza_nome_squadra(s) for s in squadre]
     esito = L.prepara_podio(conn, torneo_id, squadre, campi.get("descrizione", ""),
-                            "foto" if foto else None, sostituzione_ammessa=True)
+                            "foto" if foto or foto_tenuta else None, sostituzione_ammessa=True)
     if not esito.ok:
         return _json(False, esito.testo)
     dati = esito.dati["podio"]
@@ -253,17 +272,32 @@ async def h_podio(req):
     gruppo = chat_gruppo_registrato(conn)
     if bot is None or gruppo is None:
         return _json(False, NESSUN_GRUPPO if bot else "Bot non disponibile.")
-    try:   # prima si pubblica, poi si salva: se Telegram fallisce non cambia nulla
-        if foto:
-            msg = await bot.send_photo(chat_id=gruppo, photo=foto, caption=dati["caption"])
-            dati["foto"] = msg.photo[-1].file_id
-        else:
-            dati["foto"] = None
-            await bot.send_message(chat_id=gruppo, text=dati["caption"])
+    sostituito = bool(esito.dati["gia_podio"])
+    dati["foto"] = foto or foto_tenuta
+    try:   # prima si pubblica, poi si salva (e si toglie il post vecchio): se Telegram fallisce non cambia nulla
+        await cmd_tornei.pubblica_podio(bot, conn, gruppo, dati)
     except Exception as e:
         return _json(False, f"Pubblicazione non riuscita ({e}). Riprova tra poco.")
-    L.salva_podio(conn, dati)
-    return _json(True, "✅ Podio pubblicato nel gruppo.")
+    return _json(True, "✅ Podio aggiornato nel gruppo (post vecchio tolto)." if sostituito
+                 else "✅ Podio pubblicato nel gruppo.")
+
+
+async def h_podio_img(req):
+    """Foto del podio salvato (per vederlo nella Mini App)."""
+    _admin(req)
+    try:
+        tid = int(req.query.get("id", ""))
+    except ValueError:
+        raise web.HTTPBadRequest()
+    row = _db().execute("SELECT foto_file_id FROM tornei WHERE id = ?", (tid,)).fetchone()
+    bot = req.app.get("bot")
+    if not row or not row[0] or bot is None:
+        raise web.HTTPNotFound()
+    try:
+        dati = bytes(await (await bot.get_file(row[0])).download_as_bytearray())
+    except Exception:
+        raise web.HTTPNotFound()
+    return web.Response(body=dati, content_type="image/jpeg", headers={"Cache-Control": "private, max-age=600"})
 
 
 def aggiungi_rotte(app: web.Application, utente, is_admin, conn) -> None:
@@ -272,3 +306,4 @@ def aggiungi_rotte(app: web.Application, utente, is_admin, conn) -> None:
     app.router.add_get("/api/pannello", h_stato)
     app.router.add_post("/api/pannello", h_azione)
     app.router.add_post("/api/pannello/podio", h_podio)
+    app.router.add_get("/api/pannello/podio/img", h_podio_img)

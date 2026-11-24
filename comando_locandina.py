@@ -45,6 +45,7 @@ Le programmazioni sono salvate nel database: se il bot si riavvia
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -91,7 +92,7 @@ def _crea_tabella(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_id TEXT,
             didascalia TEXT NOT NULL,
-            stato TEXT NOT NULL,          -- bozza | programmata | pubblicata | annullata | scaduta
+            stato TEXT NOT NULL,          -- bozza | programmata | pubblicata | annullata | scaduta | sostituita
             pubblica_il TEXT,             -- ISO con fuso orario
             creato_il TEXT NOT NULL
         )
@@ -106,7 +107,9 @@ def _crea_tabella(conn):
                        ("msg_gruppo", "INTEGER"),                        # ultimo post nel gruppo
                        ("torneo_ref", "INTEGER"),                        # torneo a cui si riferisce
                        ("prossimo_repost", "TEXT"),
-                       ("max_coppie", "INTEGER")):                       # NULL = predefinito
+                       ("max_coppie", "INTEGER"),                        # NULL = predefinito
+                       ("dati", "TEXT"),                                 # dati del modulo (JSON), per rivederla/modificarla
+                       ("sostituisce", "INTEGER")):                      # correzione di una locandina programmata/pubblicata
         if nome not in colonne:
             conn.execute(f"ALTER TABLE locandine ADD COLUMN {nome} {tipo}")
     # data di gioco salvata anche nei tornei, per sapere se un torneo è già stato giocato
@@ -297,16 +300,74 @@ def _gruppo(conn):
 
 # ---------- operazioni (una sola logica: comandi e pannello della Mini App) ----------
 
-def crea_bozza(conn, dati, nuovo_torneo: bool = True, ripeti: bool = True, extra: str | None = None) -> int:
-    """Salva la bozza della locandina (l'immagine la aggiunge chi la manda in chat)."""
+def crea_bozza(conn, dati, nuovo_torneo: bool = True, ripeti: bool = True, extra: str | None = None,
+               sostituisce: int | None = None) -> int:
+    """Salva la bozza della locandina (l'immagine la aggiunge chi la manda in chat).
+    sostituisce = n° di una locandina programmata o pubblicata da correggere."""
+    if sostituisce is not None:
+        nuovo_torneo = False   # una correzione non apre mai un torneo nuovo
     cur = conn.execute(
         "INSERT INTO locandine (didascalia, stato, creato_il, nome_torneo, data_torneo, nuovo_torneo, ora_torneo, "
-        "max_coppie, ripeti, extra) VALUES (?, 'bozza', ?, ?, ?, ?, ?, ?, ?, ?)",
+        "max_coppie, ripeti, extra, dati, sostituisce) VALUES (?, 'bozza', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (_didascalia(dati), datetime.now(FUSO).isoformat(), _nome_torneo(conn, dati), dati["data"].isoformat(),
-         int(nuovo_torneo), dati["ora"], dati["max_coppie"], int(ripeti), extra or None),
+         int(nuovo_torneo), dati["ora"], dati["max_coppie"], int(ripeti), extra or None,
+         json.dumps({**dati, "data": dati["data"].isoformat()}), sostituisce),
     )
     conn.commit()
     return cur.lastrowid
+
+
+def dati_salvati(conn, lid: int) -> dict | None:
+    """Dati con cui è stata fatta la locandina (data, formula, ora, quota, premi, 5X, max).
+    Per le locandine fatte prima di questa funzione li ricava da nome, data e ora:
+    quota e premi non erano salvati -> valori fissi e 'parziale' = True."""
+    row = conn.execute("SELECT dati, nome_torneo, data_torneo, ora_torneo, max_coppie FROM locandine WHERE id = ?",
+                       (lid,)).fetchone()
+    if not row:
+        return None
+    dati_j, nome, data_iso, ora, massimo = row
+    if dati_j:
+        d = json.loads(dati_j)
+        d["data"] = date.fromisoformat(d["data"])
+        d["parziale"] = False
+        return d
+    parti = re.sub(r"^\d{1,2}/\d{1,2}(?:/\d{2})?\s*", "", nome or "").split()
+    cinque_x = bool(parti) and parti[0].upper() == "5X"
+    formule = [f.lower() for f in " ".join(parti[1:] if cinque_x else parti).split("-") if f.lower() in FORMULE]
+    return {"data": date.fromisoformat(data_iso) if data_iso else None, "formula": formule,
+            "ora": ora or ORA_DEFAULT, "quota": QUOTA_DEFAULT, "premi": PREMI_DEFAULT,
+            "cinque_x": cinque_x, "max_coppie": massimo, "parziale": True}
+
+
+def _nome_formula(d) -> str:
+    formula = "-".join(f.capitalize() for f in d["formula"])
+    return ("5X " + formula) if d.get("cinque_x") else formula
+
+
+def differenze(vecchi: dict, nuovi: dict) -> list[str]:
+    """Cosa è cambiato tra due locandine (per l'avviso nel gruppo)."""
+    cambi = []
+    if vecchi.get("data") != nuovi["data"] or vecchi.get("ora") != nuovi["ora"]:
+        cambi.append(f"nuova data {testo_data(nuovi['data'], nuovi['ora'])}")
+    if vecchi.get("formula") != nuovi["formula"] or bool(vecchi.get("cinque_x")) != bool(nuovi.get("cinque_x")):
+        cambi.append(f"formula {_nome_formula(nuovi)}")
+    if not vecchi.get("parziale"):   # quota e premi delle locandine vecchie non sono noti
+        if vecchi.get("quota") != nuovi["quota"]:
+            cambi.append(f"quota {nuovi['quota']}")
+        if vecchi.get("premi") != nuovi["premi"]:
+            cambi.append(f"premi {nuovi['premi']}")
+    if nuovi.get("max_coppie") and vecchi.get("max_coppie") != nuovi["max_coppie"]:
+        cambi.append(f"massimo {nuovi['max_coppie']} coppie")
+    return cambi
+
+
+def _sostituita(conn, lid: int):
+    """(n°, stato) della locandina che questa bozza corregge, o (None, None)."""
+    row = conn.execute("SELECT sostituisce FROM locandine WHERE id = ?", (lid,)).fetchone()
+    if not row or row[0] is None:
+        return None, None
+    st = conn.execute("SELECT stato FROM locandine WHERE id = ?", (row[0],)).fetchone()
+    return row[0], (st[0] if st else None)
 
 
 async def genera_png(dati) -> bytes:
@@ -318,7 +379,7 @@ async def genera_png(dati) -> bytes:
 
 def modificabile(conn, lid: int) -> bool:
     row = conn.execute("SELECT stato FROM locandine WHERE id = ?", (lid,)).fetchone()
-    return bool(row) and row[0] not in ("pubblicata", "annullata", "scaduta")
+    return bool(row) and row[0] not in ("pubblicata", "annullata", "scaduta", "sostituita")
 
 
 def imposta_testo(lid: int, testo: str):
@@ -345,12 +406,17 @@ def programma(job_queue, lid: int, quando: datetime):
     conn = _conn()
     if not modificabile(conn, lid):
         return False, "Questa locandina non è più modificabile."
+    vid, vstato = _sostituita(conn, lid)
+    if vstato == "pubblicata":
+        return False, "La correzione di una locandina già pubblicata si pubblica subito: usa «Sostituisci ora»."
     conn.execute(
         "UPDATE locandine SET stato = 'programmata', pubblica_il = ? WHERE id = ?",
         (quando.isoformat(), lid),
     )
     conn.commit()
     _programma_job(job_queue, lid, quando)
+    if vstato == "programmata":   # la versione corretta prende il posto di quella vecchia
+        annulla(job_queue, vid)
     gruppo_ok = _gruppo(conn) is not None
     return True, (
         f"⏰ Locandina n° {lid} programmata per {quando.strftime('%d/%m alle %H:%M')}."
@@ -546,6 +612,14 @@ def _caption_anteprima(lid: int, testo: str) -> str:
                         "(stop se completo o iscrizioni chiuse).")
     else:
         piano_ripeti = "Ripubblicazione: no."
+    vid, vstato = _sostituita(conn, lid)
+    if vstato == "pubblicata":
+        cambi = differenze(dati_salvati(conn, vid), dati_salvati(conn, lid))
+        piano = (f"🔄 Sostituisce la n° {vid} già pubblicata: il post vecchio viene tolto, la nuova va in fondo "
+                 f"con la lista e la riga «{_riga_avviso(cambi)}». Il torneo resta lo stesso"
+                 + (" (nome e data aggiornati)." if any(c.startswith(("nuova data", "formula")) for c in cambi) else "."))
+    elif vstato == "programmata":
+        piano += f"\n🔄 Prende il posto della n° {vid} programmata (che viene annullata)."
     return (f"Anteprima n° {lid}\n\nDidascalia nel gruppo:\n{testo}\n\n{piano}\n"
             f"{_piano_max(conn, lid)}\n{piano_ripeti}")
 
@@ -744,6 +818,11 @@ async def _job_repost(context: ContextTypes.DEFAULT_TYPE):
 
 async def _pubblica(bot, lid: int, job_queue=None) -> str:
     conn = _conn()
+    vid, vstato = _sostituita(conn, lid)
+    if vstato == "pubblicata":   # correzione: sostituisce il post nel gruppo, il torneo resta quello
+        return await sostituisci_pubblicata(bot, job_queue, lid)
+    if vstato == "programmata":
+        annulla(job_queue, vid)
     row = conn.execute(
         "SELECT file_id, didascalia, stato, extra FROM locandine WHERE id = ?", (lid,)
     ).fetchone()
@@ -789,6 +868,88 @@ async def _pubblica(bot, lid: int, job_queue=None) -> str:
             esito += f"\n🔁 Prossima ripubblicazione: {datetime.fromisoformat(prossimo).strftime('%d/%m %H:%M')}."
         else:
             esito += "\n🔁 Nessuna ripubblicazione: il torneo arriva prima di 48 ore."
+    return esito
+
+
+def _riga_avviso(cambi: list[str]) -> str:
+    return "🔄 Locandina aggiornata" + (": " + ", ".join(cambi) if cambi else "")
+
+
+def _nome_corretto(conn, d, torneo_id: int) -> str:
+    """Nome del torneo dopo la correzione (stessa regola di _nome_torneo, escluso il torneo stesso)."""
+    giorno = d["data"]
+    nome = f"{giorno.day:02d}/{giorno.month:02d} {_nome_formula(d)}"
+    if conn.execute("SELECT 1 FROM tornei WHERE LOWER(nome) = LOWER(?) AND id != ?", (nome, torneo_id)).fetchone():
+        nome = f"{giorno.day:02d}/{giorno.month:02d}/{giorno.year % 100:02d} {_nome_formula(d)}"
+    return nome
+
+
+async def sostituisci_pubblicata(bot, job_queue, lid: int) -> str:
+    """Pubblica la correzione lid di una locandina già uscita: nuovo post in fondo al gruppo
+    con la riga «🔄 Locandina aggiornata: …», il vecchio tolto, lista sotto. Il torneo resta
+    lo stesso: se è quello attivo, aggiorna nome, data e massimo."""
+    conn = _conn()
+    vid, vstato = _sostituita(conn, lid)
+    file_id, didascalia, extra, stato, ripeti, massimo = conn.execute(
+        "SELECT file_id, didascalia, extra, stato, ripeti, max_coppie FROM locandine WHERE id = ?", (lid,)).fetchone()
+    if stato in ("pubblicata", "annullata", "sostituita"):
+        return f"La locandina n° {lid} è già {stato}."
+    if vstato != "pubblicata":
+        return f"❌ La n° {vid} non è più la locandina pubblicata: rifai la modifica dall'ultima uscita."
+    gruppo = _gruppo(conn)
+    if gruppo is None:
+        return "Nessun gruppo registrato: manda /registragruppo dentro il gruppo del circolo."
+    vecchi, nuovi = dati_salvati(conn, vid), dati_salvati(conn, lid)
+    cambi = differenze(vecchi, nuovi)
+    msg_vecchio, torneo_ref = conn.execute(
+        "SELECT msg_gruppo, torneo_ref FROM locandine WHERE id = ?", (vid,)).fetchone()
+    att = _torneo_attivo(conn)
+    del_attivo = bool(att and att[0] == torneo_ref)
+    righe = []
+    prima = None
+    if del_attivo:   # il torneo segue la locandina corretta (prima di pubblicare, per la riga dei posti)
+        prima = conn.execute("SELECT nome, data_torneo, max_coppie FROM tornei WHERE id = ?", (att[0],)).fetchone()
+        nome = _nome_corretto(conn, nuovi, att[0])
+        conn.execute("UPDATE tornei SET nome = ?, data_torneo = ?, max_coppie = COALESCE(?, max_coppie) WHERE id = ?",
+                     (nome, nuovi["data"].isoformat(), massimo, att[0]))
+        conn.execute("UPDATE locandine SET nome_torneo = ? WHERE id = ?", (nome, lid))
+        conn.commit()
+        if nome != prima[0]:
+            righe.append(f"🏆 Torneo rinominato: '{prima[0]}' → '{nome}'.")
+        if massimo and massimo != prima[2]:
+            righe.append(f"👥 Massimo coppie: {massimo}.")
+    testo = _testo_completo(didascalia, extra)
+    if del_attivo:
+        testo += f"\n\n{_riga_posti(await _iscritte(conn, torneo_ref), conn, torneo_ref)}"
+    avviso = _riga_avviso(cambi)
+    if len(avviso) + 2 + len(testo) > LIMITE_DIDASCALIA:
+        avviso = _riga_avviso([])
+    try:
+        nuovo = await bot.send_photo(chat_id=gruppo, photo=file_id, caption=f"{avviso}\n\n{testo}", **_bottone(bot))
+    except Exception as e:
+        if prima:   # niente pubblicato: il torneo torna com'era
+            conn.execute("UPDATE tornei SET nome = ?, data_torneo = ?, max_coppie = ? WHERE id = ?", (*prima, att[0]))
+            conn.commit()
+        return f"❌ Locandina n° {lid} NON pubblicata: errore Telegram ({e}). Il post vecchio è ancora lì."
+    _ferma_repost(conn, job_queue, vid)
+    conn.execute("UPDATE locandine SET stato = 'sostituita' WHERE id = ?", (vid,))
+    conn.execute("UPDATE locandine SET stato = 'pubblicata', msg_gruppo = ?, torneo_ref = ? WHERE id = ?",
+                 (nuovo.message_id, torneo_ref, lid))
+    conn.commit()
+    await _cancella_post_vecchi(bot, conn, gruppo, nuovo.message_id, msg_vecchio)
+    if del_attivo and _ripubblica_lista:
+        try:
+            await _ripubblica_lista(bot, conn, gruppo)
+        except Exception:
+            pass
+    esito = f"✅ Locandina n° {vid} sostituita nel gruppo dalla n° {lid} (post vecchio tolto)."
+    if righe:
+        esito += "\n" + "\n".join(righe)
+    if ripeti and job_queue is not None:
+        _avvia_repost(conn, job_queue, lid)
+        prossimo = conn.execute("SELECT prossimo_repost FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
+        esito += (f"\n🔁 Prossima ripubblicazione: {datetime.fromisoformat(prossimo).strftime('%d/%m %H:%M')}."
+                  if prossimo else "\n🔁 Nessuna ripubblicazione: il torneo arriva prima di 48 ore.")
     return esito
 
 

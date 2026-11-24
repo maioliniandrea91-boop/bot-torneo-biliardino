@@ -166,6 +166,60 @@ async def main():
     _, r = await az(azione="pubblica", id=9999)
     assert not r["ok"] and "non trovata" in r["errore"]
 
+    # ---- vedi / scarica / modifica della locandina pubblicata (torneo che resta lo stesso)
+    _, r = await az(azione="modulo", id=b["id"])
+    m = r["modulo"]
+    assert r["ok"] and m["data"] == data.isoformat() and m["formule"] == ["volo", "tradizionale"] and m["cinque_x"]
+    assert m["quota"] == "25€" and m["max"] == 14 and not m["parziale"], m
+    _, r = await az(azione="file", id=b["id"])
+    assert r["ok"] and bot.inviati[-1][:2] == ("doc", ADMIN) and bot.inviati[-1][2].endswith(".png")
+    conn = db_connect()
+    tornei_prima = conn.execute("SELECT COUNT(*) FROM tornei").fetchone()[0]
+    tid_att = conn.execute("SELECT id FROM tornei WHERE chiuso = 0").fetchone()[0]
+    msg_vecchio = conn.execute("SELECT msg_gruppo FROM locandine WHERE id = ?", (b["id"],)).fetchone()[0]
+    data2 = data + timedelta(days=1)
+    corr = {**modulo, "data": data2.isoformat(), "formule": ["volo"], "cinque_x": False, "max": 16,
+            "nuovo_torneo": True, "corregge": b["id"]}
+    _, r = await az(azione="anteprima", **corr)
+    c = r["bozza"]
+    assert r["ok"] and c["corregge"] == b["id"] and c["corregge_stato"] == "pubblicata" and not c["nuovo_torneo"]
+    assert "Sostituisce la n°" in c["caption"] and "nuova data" in c["caption"], c["caption"]
+    _, r = await az(azione="programma", id=c["id"], quando=futuro)
+    assert not r["ok"] and "Sostituisci" in r["errore"]
+    _, r = await az(azione="pubblica", id=c["id"])
+    assert r["ok"] and "sostituita" in r["testo"] and "rinominato" in r["testo"], r
+    post = [x for x in bot.inviati if x[0] == "foto" and x[1] == GRUPPO][-1][2]
+    assert post.startswith("🔄 Locandina aggiornata: nuova data") and "formula Volo" in post and "massimo 16" in post, post
+    assert (GRUPPO, msg_vecchio) in bot.cancellati
+    conn = db_connect()
+    assert conn.execute("SELECT stato FROM locandine WHERE id = ?", (b["id"],)).fetchone()[0] == "sostituita"
+    assert conn.execute("SELECT COUNT(*) FROM tornei").fetchone()[0] == tornei_prima   # nessun torneo nuovo
+    att = conn.execute("SELECT id, nome, max_coppie, data_torneo FROM tornei WHERE chiuso = 0").fetchone()
+    assert att == (tid_att, f"{data2.day:02d}/{data2.month:02d} Volo", 16, data2.isoformat()), att
+    assert (await stato())["ultima"]["id"] == c["id"]
+    _, r = await az(azione="anteprima", **{**corr, "corregge": b["id"]})   # la vecchia non è più pubblicata
+    assert not r["ok"] and "non è più" in r["errore"]
+
+    # ---- modifica di una programmata: la nuova prende il posto della vecchia
+    _, r = await az(azione="anteprima", **modulo)
+    p1 = r["bozza"]["id"]
+    await az(azione="programma", id=p1, quando=futuro)
+    _, r = await az(azione="anteprima", **{**modulo, "ora": "21:00", "corregge": p1})
+    p2 = r["bozza"]["id"]
+    assert r["ok"] and "Prende il posto della n°" in r["bozza"]["caption"]
+    _, r = await az(azione="programma", id=p2, quando=futuro)
+    assert r["ok"] and f"locandina_{p1}" not in jq.lavori and f"locandina_{p2}" in jq.lavori
+    assert [x["id"] for x in (await stato())["programmate"]] == [p2]
+    await az(azione="annulla", id=p2)
+
+    # ---- locandina vecchia senza dati salvati: ricavati da nome, data e ora
+    conn = db_connect()
+    cur = conn.execute("INSERT INTO locandine (didascalia, stato, creato_il, nome_torneo, data_torneo, ora_torneo) "
+                       "VALUES ('x', 'annullata', '2026-01-01', '05/12 5X Rollerball-Tradizionale', '2026-12-05', '22:00')")
+    conn.commit()
+    d_v = C.dati_salvati(conn, cur.lastrowid)
+    assert d_v["formula"] == ["rollerball", "tradizionale"] and d_v["cinque_x"] and d_v["parziale"] and d_v["ora"] == "22:00"
+
     # ---- argomenti dal modulo = stessi di /locandina
     dati, err = locandina_app.argomenti_da_modulo({**modulo, "quota": "25,50 €", "max": None})
     assert err is None and dati["quota"] == "25.50€" and dati["max_coppie"] is None and dati["premi"] == "COPPE E MEDAGLIE"

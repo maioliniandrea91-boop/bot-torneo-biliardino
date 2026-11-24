@@ -37,8 +37,13 @@ def db_connect():
         )
     """)
     # massimo di coppie del singolo torneo (NULL = predefinito MAX_SQUADRE)
-    if "max_coppie" not in [r[1] for r in conn.execute("PRAGMA table_info(tornei)")]:
+    colonne = [r[1] for r in conn.execute("PRAGMA table_info(tornei)")]
+    if "max_coppie" not in colonne:
         conn.execute("ALTER TABLE tornei ADD COLUMN max_coppie INTEGER")
+    # podio: descrizione e post nel gruppo, per rivederlo e sostituirlo dalla Mini App
+    for nome, tipo in (("podio_descrizione", "TEXT"), ("podio_msg", "INTEGER")):
+        if nome not in colonne:
+            conn.execute(f"ALTER TABLE tornei ADD COLUMN {nome} {tipo}")
     conn.commit()
 
     # Al primissimo avvio crea il torneo iniziale, se non esiste ancora nulla.

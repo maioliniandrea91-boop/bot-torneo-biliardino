@@ -133,12 +133,22 @@ async def podio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def pubblica_podio(bot, conn, chat_id: int, dati: dict):
-    """Salva il podio sul torneo e lo pubblica in chat_id."""
-    L.salva_podio(conn, dati)
+    """Pubblica il podio in chat_id, poi lo salva sul torneo (se Telegram fallisce non cambia nulla).
+    Se il torneo aveva già un podio pubblicato, il post vecchio viene tolto dal gruppo
+    (Telegram lo permette solo entro 48 ore: dopo va tolto a mano)."""
+    vecchio = conn.execute("SELECT podio_msg FROM tornei WHERE id = ?", (dati["torneo_id"],)).fetchone()
     if dati["foto"]:
-        await bot.send_photo(chat_id=chat_id, photo=dati["foto"], caption=dati["caption"])
+        msg = await bot.send_photo(chat_id=chat_id, photo=dati["foto"], caption=dati["caption"])
+        dati["foto"] = msg.photo[-1].file_id
     else:
-        await bot.send_message(chat_id=chat_id, text=dati["caption"])
+        msg = await bot.send_message(chat_id=chat_id, text=dati["caption"])
+    dati["msg"] = msg.message_id
+    L.salva_podio(conn, dati)
+    if vecchio and vecchio[0] and vecchio[0] != msg.message_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=vecchio[0])
+        except Exception:
+            pass   # già tolto a mano o più vecchio di 48 ore
 
 
 async def bottoni_podio(update: Update, context: ContextTypes.DEFAULT_TYPE):

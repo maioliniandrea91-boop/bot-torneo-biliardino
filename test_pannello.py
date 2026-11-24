@@ -175,7 +175,24 @@ async def main():
     for k, v in {"modo": "anteprima", "torneo_id": str(tid), "primo": "A-B", "secondo": "C-D", "terzo": "E-F"}.items():
         form.add_field(k, v)
     r = await (await cli.post("/api/pannello/podio", data=form, headers=H)).json()
-    assert r["ok"] and "già un podio" in r["avviso"]
+    assert r["ok"] and "già un podio" in r["avviso"] and r["caption"].startswith("🔄 Podio aggiornato")
+
+    # ---- vedi e modifica il podio pubblicato: tiene la foto, post vecchio tolto, avviso in testa
+    _, r = await az(azione="dettaglio", id=tid)
+    pp = r["torneo"]["podio_pubblicato"]
+    assert pp["primo"] == "Gianni-Pinna" and pp["foto"] and pp["nel_gruppo"] and pp["descrizione"] == "", pp
+    msg_vecchio = db_connect().execute("SELECT podio_msg FROM tornei WHERE id = ?", (tid,)).fetchone()[0]
+    form = FormData()
+    for k, v in {"modo": "pubblica", "torneo_id": str(tid), "primo": "Gianni-Pinna", "secondo": "Ugo-Rino",
+                 "terzo": "Ada-Eva", "descrizione": "Corretto il 2° posto", "tieni_foto": "1"}.items():
+        form.add_field(k, v)
+    r = await (await cli.post("/api/pannello/podio", data=form, headers=H)).json()
+    assert r["ok"] and "aggiornato" in r["testo"], r
+    assert bot.inviati[-1][0] == "foto" and bot.inviati[-1][2].startswith("🔄 Podio aggiornato\n\n🏆 Podio")
+    assert (GRUPPO, msg_vecchio) in bot.cancellati
+    row = db_connect().execute("SELECT podio_secondo, podio_descrizione, foto_file_id, podio_msg FROM tornei WHERE id = ?",
+                               (tid,)).fetchone()
+    assert row[0] == "Ugo-Rino" and row[1] == "Corretto il 2° posto" and row[2].startswith("FOTO") and row[3] != msg_vecchio
 
     # ---- nuovo torneo vuoto: il podio propone il precedente
     import logica_tornei as L

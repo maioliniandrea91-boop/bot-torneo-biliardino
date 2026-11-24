@@ -676,7 +676,7 @@ async function salvaRisultato(){
 }
 
 /* ---------- pannello Tornei (admin) ---------- */
-let P = null, pSub = "attivo", pPag = 1, pB = {g1:"", g2:""}, pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[]};
+let P = null, pSub = "attivo", pPag = 1, pB = {g1:"", g2:""}, pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[], pub:null, pubUrl:null, tieni:false};
 async function caricaPannello(){
   try{
     const r = await fetch("/api/pannello?pagina=" + pPag, {headers:{"X-Init-Data":INIT}});
@@ -727,6 +727,7 @@ function vPAttivo(){
 }
 /* locandina (fase 3): stessa logica di /locandina, copia dell'anteprima anche in chat col bot */
 let LC = null, lcB = null, lcBz = null, lcImg = null, lcStale = false, lcQuando = "", lc48 = false, lcTestoPub = null;
+let lcImgU = null, lcImgUid = null, lcVedi = null, lcImgV = null;   // immagini dell'ultima pubblicata e di una programmata
 const LC_FORMULE = {rollerball:"Rollerball", volo:"Volo", tradizionale:"Tradizionale"};
 function lcNuovoModulo(){
   const p = LC.predefiniti;
@@ -740,8 +741,9 @@ async function caricaLocandina(){
     LC = d;
     if (!lcB) lcNuovoModulo();
     if (lcBz && !(d.bozza && d.bozza.id === lcBz.id)) lcChiudiBozza();   // pubblicata o annullata dalla chat
-    if (d.bozza && !lcBz) { lcBz = d.bozza; lcB.extra = d.bozza.extra; lcB.nuovo_torneo = d.bozza.nuovo_torneo; lcB.ripeti = d.bozza.ripeti; lcCaricaImg(d.bozza.id); }
+    if (d.bozza && !lcBz) { lcBz = d.bozza; lcB.extra = d.bozza.extra; lcB.nuovo_torneo = d.bozza.nuovo_torneo; lcB.ripeti = d.bozza.ripeti; lcB.corregge = d.bozza.corregge; lcB.corregge_stato = d.bozza.corregge_stato; lcCaricaImg(d.bozza.id); lcRiempi(d.bozza.id); }
     if (d.ultima && lcTestoPub === null) lcTestoPub = d.ultima.extra;
+    if (d.ultima && d.ultima.id !== lcImgUid) { lcImgUid = d.ultima.id; lcBlob(d.ultima.id).then(u => { lcImgU = u; if (tab === "tornei" && pSub === "locandina" && !foglioAperto) render(); }); }
     if (tab === "tornei" && pSub === "locandina" && !foglioAperto) render();
   }catch(e){ toast("Connessione assente", true); }
 }
@@ -753,6 +755,42 @@ async function lcCaricaImg(id){
     lcImg = URL.createObjectURL(await r.blob());
     if (tab === "tornei" && pSub === "locandina" && !foglioAperto) render();
   }catch(e){}
+}
+async function lcBlob(id){
+  try{
+    const r = await fetch("/api/pannello/locandina/img?id=" + id, {headers:{"X-Init-Data":INIT}});
+    return r.ok ? URL.createObjectURL(await r.blob()) : null;
+  }catch(e){ return null; }
+}
+async function lcVediProg(id){
+  if (lcImgV) URL.revokeObjectURL(lcImgV);
+  lcImgV = null;
+  lcVedi = lcVedi === id ? null : id;
+  render();
+  if (lcVedi !== null) { lcImgV = await lcBlob(id); render(); }
+}
+async function lcRiempi(id){   // bozza ritrovata riaprendo la Mini App: rimetto nel modulo i suoi dati
+  const d = await lcAz({azione:"modulo", id});
+  if (!d || !lcBz || lcBz.id !== id) return;
+  const m = d.modulo;
+  Object.assign(lcB, {data:m.data || lcB.data, formule:m.formule, cinque_x:m.cinque_x, ora:m.ora, quota:m.quota, premi:m.premi, max:m.max});
+  if (tab === "tornei" && pSub === "locandina" && !foglioAperto) render();
+}
+async function lcFile(id){ await lcAz({azione:"file", id}); }
+async function lcModifica(id, stato){
+  const d = await lcAz({azione:"modulo", id});
+  if (!d) return;
+  if (lcBz) await lcAz({azione:"annulla", id:lcBz.id});   // bozza a metà: non serve più
+  lcChiudiBozza();
+  const m = d.modulo;
+  lcB = {data:m.data || LC.predefiniti.data, formule:m.formule, cinque_x:m.cinque_x, ora:m.ora, quota:m.quota, premi:m.premi,
+         max:m.max, extra:m.extra, nuovo_torneo:false, ripeti:m.ripeti, corregge:id, corregge_stato:stato, parziale:m.parziale};
+  if (stato === "pubblicata") lcTestoPub = null;
+  render(); window.scrollTo(0, 0);
+}
+function lcAnnullaModifica(){
+  if (lcBz) lcAz({azione:"annulla", id:lcBz.id});
+  lcChiudiBozza(); render();
 }
 async function lcAz(dati, conferma){
   if (conferma && !await chiedi(conferma)) return null;
@@ -788,7 +826,10 @@ function lcMax(delta){
 function vPLocandina(){
   if (!LC || !lcB) return '<div class="empty">Caricamento…</div>';
   const b = lcB, maxV = b.max ?? LC.predefiniti.max;
-  let h = `<section><h2>${lcBz ? "Modifica locandina" : "Nuova locandina"}</h2><div class="card">
+  const corr = b.corregge, corrPub = corr && (b.corregge_stato || (lcBz && lcBz.corregge_stato)) === "pubblicata";
+  let h = `<section><h2>${corr ? `✏️ Modifica della n° ${corr} ${corrPub ? "pubblicata" : "programmata"}` : (lcBz ? "Modifica locandina" : "Nuova locandina")}</h2>
+    ${corr ? `<p class="muted" style="margin:0 6px 8px">${corrPub ? "Il torneo resta lo stesso (iscritti compresi). Con «Sostituisci» il post vecchio viene tolto e la nuova esce in fondo con la lista e la riga «🔄 Locandina aggiornata»." : "La versione nuova prende il posto di quella programmata."}${b.parziale ? "<br>⚠️ Locandina fatta prima di questa funzione: quota e premi non erano salvati, controllali." : ""}</p>` : ""}
+    <div class="card">
     <div class="row"><span>Data</span><input type="date" class="t" style="width:auto" min="${LC.predefiniti.oggi}" value="${esc(b.data)}" oninput="lcB.data=this.value" onchange="lcCambio()"></div>
     <div class="campo"><label>Formula (anche più di una)</label><div class="seg">${LC.formule.map(k=>`<button class="${b.formule.includes(k)?"on":""}" onclick="lcFormula('${k}')">${LC_FORMULE[k]}</button>`).join("")}</div></div>
     <div class="row"><span>Modalità 5X</span>${lcSi("cinque_x", b.cinque_x)}</div>
@@ -796,25 +837,29 @@ function vPLocandina(){
     <div class="row"><span>Quota a coppia</span><input class="t" style="width:110px" value="${esc(b.quota)}" oninput="lcB.quota=this.value" onchange="lcCambio()"></div>
     <div class="row"><span>Premi</span><input class="t" style="width:150px" value="${esc(b.premi)}" oninput="lcB.premi=this.value" onchange="lcCambio()"></div>
     <div class="row"><span>Massimo coppie${b.max===null?' <span class="muted">(predefinito)</span>':""}</span><div class="step"><button onclick="lcMax(-1)" ${maxV<=LC.limiti.min?"disabled":""}>−</button><span>${maxV}</span><button onclick="lcMax(1)" ${maxV>=LC.limiti.max?"disabled":""}>+</button></div></div>
-    <div class="row"><span>Nuovo torneo</span>${lcSi("nuovo_torneo", b.nuovo_torneo)}</div>
+    ${corr ? "" : `<div class="row"><span>Nuovo torneo</span>${lcSi("nuovo_torneo", b.nuovo_torneo)}</div>`}
     <div class="row"><span>Ripeti ogni 48h</span>${lcSi("ripeti", b.ripeti)}</div>
     <div class="campo"><label>Testo aggiunto sotto la didascalia (facoltativo)</label><textarea class="t" oninput="lcB.extra=this.value">${esc(b.extra)}</textarea>
     ${lcBz ? `<button class="b" style="margin-top:6px" onclick="lcSalvaTesto()">💾 Salva testo</button>` : ""}</div>
   </div><button class="b ${lcBz && !lcStale ? "" : "pri "}big" onclick="lcAnteprima()">👁 ${lcBz ? "Rifai anteprima" : "Anteprima"}</button>
+  ${corr ? `<button class="b big" style="margin-top:8px" onclick="lcAnnullaModifica()">↩️ Annulla modifica</button>` : ""}
   ${LC.gruppo ? "" : '<p class="muted" style="margin:6px">⚠️ Nessun gruppo registrato: scrivi /registragruppo nel gruppo.</p>'}</section>`;
   if (lcBz) {
     h += `<section><h2>Anteprima n° ${lcBz.id}${lcBz.stato==="programmata" ? " · ⏰ " + esc(lcBz.quando) : ""}</h2><div class="card prev-podio">${lcImg ? `<img src="${lcImg}">` : ""}${esc(lcBz.caption)}</div>
       ${lcStale ? '<p class="muted" style="margin:0 6px 8px">⚠️ Hai cambiato i dati dell\'immagine: rifai l\'anteprima prima di pubblicare.</p>' : '<p class="muted" style="margin:0 6px 8px">Copia con i bottoni anche nella chat col bot.</p>'}
-      <button class="b pri big" onclick="lcPubblica()" ${lcStale || !LC.gruppo ? "disabled" : ""}>📢 Pubblica ora</button>
-      <div class="card" style="margin-top:8px"><div class="row"><span>Pubblica il</span><input type="datetime-local" class="t" style="width:auto" value="${esc(lcQuando)}" oninput="lcQuando=this.value"></div>
-      <button class="b big" onclick="lcProgramma()" ${lcStale ? "disabled" : ""}>⏰ Programma</button></div>
+      <button class="b pri big" onclick="lcPubblica()" ${lcStale || !LC.gruppo ? "disabled" : ""}>${corrPub ? "🔄 Sostituisci nel gruppo" : "📢 Pubblica ora"}</button>
+      ${corrPub ? "" : `<div class="card" style="margin-top:8px"><div class="row"><span>Pubblica il</span><input type="datetime-local" class="t" style="width:auto" value="${esc(lcQuando)}" oninput="lcQuando=this.value"></div>
+      <button class="b big" onclick="lcProgramma()" ${lcStale ? "disabled" : ""}>⏰ Programma</button></div>`}
       <button class="b red big" style="margin-top:8px" onclick="lcAnnullaBozza()">❌ Annulla locandina</button></section>`;
   }
   const altre = LC.programmate.filter(p => !lcBz || p.id !== lcBz.id);
-  if (altre.length) h += `<section><h2>Programmate</h2><div class="card">${altre.map(p=>`<div class="row"><span><b>n° ${p.id}</b> ${esc(p.nome||"")}<br><span class="muted">esce il ${esc(p.quando)}</span></span><button class="b red" onclick="lcAnnulla(${p.id})">Annulla</button></div>`).join("")}</div></section>`;
+  if (altre.length) h += `<section><h2>Programmate</h2><div class="card">${altre.map(p=>`<div class="row"><span><b>n° ${p.id}</b> ${esc(p.nome||"")}<br><span class="muted">esce il ${esc(p.quando)}</span></span><span style="display:flex;gap:6px"><button class="b" onclick="lcVediProg(${p.id})">👁</button><button class="b" onclick="lcModifica(${p.id},'programmata')">✏️</button><button class="b red" onclick="lcAnnulla(${p.id})">Annulla</button></span></div>${lcVedi===p.id ? `<div class="prev-podio">${lcImgV ? `<img src="${lcImgV}">` : '<span class="muted">Carico…</span>'}</div><button class="b big" onclick="lcFile(${p.id})">📥 Mandamela in chat</button>` : ""}`).join("")}</div></section>`;
   const u = LC.ultima;
   if (u) {
-    h += `<section><h2>Ultima pubblicata · n° ${u.id} ${esc(u.nome||"")}</h2><div class="card">
+    h += `<section><h2>Ultima pubblicata · n° ${u.id} ${esc(u.nome||"")}</h2>
+      <div class="card prev-podio">${lcImgU ? `<img src="${lcImgU}">` : '<span class="muted">Carico la locandina…</span>'}</div>
+      <div class="actions" style="margin:0 0 8px"><button class="b" style="flex:1" onclick="lcFile(${u.id})">📥 Mandamela in chat</button><button class="b" style="flex:1" onclick="lcModifica(${u.id},'pubblicata')">✏️ Modifica</button></div>
+      <div class="card">
       <div class="row"><span>${u.ripeti ? "🔁 Prossima ripubblicazione " + esc(u.prossimo) : '<span class="muted">Nessuna ripubblicazione attiva</span>'}</span>${u.ripeti ? `<button class="b" onclick="lcFerma(${u.id})">Ferma</button>` : ""}</div>
       <div class="row"><span>Riparti con giro ogni 48h</span><div class="seg" style="width:150px"><button class="${lc48?"on":""}" onclick="lc48=true;render()">Sì</button><button class="${lc48?"":"on"}" onclick="lc48=false;render()">No</button></div></div>
       <button class="b big" onclick="lcRipubblica(${u.id})" ${LC.gruppo?"":"disabled"}>🔄 Ripubblica ora${u.del_torneo_attivo ? " (con iscritte e lista)" : ""}</button>
@@ -845,10 +890,13 @@ function lcChiudiBozza(){
   lcImg = null; lcNuovoModulo();
 }
 async function lcPubblica(){
-  const d = await lcAz({azione:"pubblica", id:lcBz.id}, `Pubblicare ora la locandina n° ${lcBz.id} nel gruppo?` + (lcB.nuovo_torneo ? "\nApre anche il torneo nuovo." : ""));
+  const sost = lcBz.corregge && lcBz.corregge_stato === "pubblicata";
+  const d = await lcAz({azione:"pubblica", id:lcBz.id}, sost
+    ? `Sostituire nel gruppo la locandina n° ${lcBz.corregge} con questa?\nIl post vecchio viene tolto, la nuova esce in fondo con la lista e «🔄 Locandina aggiornata». Il torneo resta lo stesso.`
+    : `Pubblicare ora la locandina n° ${lcBz.id} nel gruppo?` + (lcB.nuovo_torneo ? "\nApre anche il torneo nuovo." : ""));
   if (!d) return;
   if (d.testo.includes("\n")) setTimeout(()=>toast(d.testo.split("\n").slice(1).join(" "), false), 2700);
-  lcChiudiBozza(); lcTestoPub = null; await caricaLocandina(); caricaPannello();
+  lcChiudiBozza(); lcTestoPub = null; lcImgUid = null; await caricaLocandina(); caricaPannello();
 }
 async function lcProgramma(){
   if (!lcQuando) { toast("Scegli giorno e ora", true); return; }
@@ -928,28 +976,49 @@ async function pElimina(id){
 }
 /* podio */
 async function scegliTorneoPodio(id, ridisegna){
-  pod.tid = id; pod.prev = null; pod.squadre = [];
+  pod.tid = id; pod.prev = null; pod.squadre = []; pod.pub = null; pod.tieni = false;
+  if (pod.pubUrl) { URL.revokeObjectURL(pod.pubUrl); pod.pubUrl = null; }
   const r = await pAzSilenziosa({azione:"dettaglio", id});
-  if (r) { pod.squadre = r.torneo.squadre; pod.nome = r.torneo.nome; pod.ha_podio = !!r.torneo.podio[0]; }
+  if (r) { pod.squadre = r.torneo.squadre; pod.nome = r.torneo.nome; pod.ha_podio = !!r.torneo.podio[0]; pod.pub = r.torneo.podio_pubblicato; }
+  if (pod.pub && pod.pub.foto) {
+    try{
+      const f = await fetch("/api/pannello/podio/img?id=" + id, {headers:{"X-Init-Data":INIT}});
+      if (f.ok && pod.tid === id) { pod.pubUrl = URL.createObjectURL(await f.blob()); }
+    }catch(e){}
+  }
   if (ridisegna !== false && tab === "tornei" && !foglioAperto) render();
 }
 function vPPodio(){
   const tornei = [...P.storico.tornei];
   if (pod.tid !== null && !tornei.some(t=>t.id===pod.tid)) tornei.unshift({id:pod.tid, nome:pod.nome||""});
   let h = `<section><h2>Torneo</h2><div class="card"><select style="width:100%" onchange="scegliTorneoPodio(+this.value)">${tornei.map(t=>`<option value="${t.id}" ${t.id===pod.tid?"selected":""}>#${t.id} ${esc(t.nome)}${t.id===P.podio_proposto?" (proposto)":""}</option>`).join("")}</select>
-    ${pod.ha_podio ? '<p class="muted" style="margin:6px 2px 0">⚠️ Ha già un podio: se pubblichi viene sostituito (anche nel medagliere).</p>' : ""}</div></section>`;
+    ${pod.ha_podio ? '<p class="muted" style="margin:6px 2px 0">⚠️ Ha già un podio: se pubblichi viene sostituito (anche nel medagliere), il post vecchio tolto e il nuovo esce con «🔄 Podio aggiornato».</p>' : ""}</div></section>`;
+  if (pod.pub) {
+    const q = pod.pub;
+    h += `<section><h2>Podio pubblicato</h2><div class="card prev-podio">${q.foto ? (pod.pubUrl ? `<img src="${pod.pubUrl}">` : '<span class="muted">Carico la foto…</span>') : ""}🥇 ${esc(q.primo)}\n🥈 ${esc(q.secondo)}\n🥉 ${esc(q.terzo)}${q.descrizione ? "\n\n" + esc(q.descrizione) : ""}</div>
+      ${q.nel_gruppo ? "" : '<p class="muted" style="margin:0 6px 8px">Podio pubblicato prima di questa funzione: se lo modifichi, il post vecchio va tolto a mano dal gruppo.</p>'}
+      <div class="actions" style="margin:0"><button class="b" style="flex:1" onclick="podModifica()">✏️ Modifica</button>${q.foto ? `<button class="b" style="flex:1" onclick="pAz({azione:'podio_file',id:${pod.tid}})">📥 Foto in chat</button>` : ""}</div></section>`;
+  }
   h += `<datalist id="dlS">${pod.squadre.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>`;
   h += `<section><h2>Podio</h2><div class="card">${[["primo","🥇 Primi"],["secondo","🥈 Secondi"],["terzo","🥉 Terzi"]].map(([k,l])=>`<div class="campo"><label>${l}</label><input class="t" list="dlS" value="${esc(pod[k])}" oninput="pod.${k}=this.value;pod.prev=null" autocomplete="off" placeholder="Nome1-Nome2"></div>`).join("")}
     <div class="campo"><label>Descrizione (facoltativa)</label><textarea class="t" oninput="pod.desc=this.value;pod.prev=null">${esc(pod.desc)}</textarea></div>
-    <div class="campo"><label>Foto (facoltativa)</label><input id="podFile" type="file" accept="image/*" style="display:none" onchange="podFoto(this.files[0])"><div class="actions" style="margin-top:0"><button class="b" onclick="$('#podFile').click()">📷 ${pod.foto ? "Cambia foto" : "Scegli foto"}</button>${pod.foto ? `<button class="b red" onclick="podFoto(null)">Togli foto</button><span class="muted" style="align-self:center">✓ foto pronta</span>` : ""}</div></div>
+    <div class="campo"><label>Foto (facoltativa)</label><input id="podFile" type="file" accept="image/*" style="display:none" onchange="podFoto(this.files[0])"><div class="actions" style="margin-top:0"><button class="b" onclick="$('#podFile').click()">📷 ${pod.foto || pod.tieni ? "Cambia foto" : "Scegli foto"}</button>${pod.foto || pod.tieni ? `<button class="b red" onclick="podFoto(null)">Togli foto</button><span class="muted" style="align-self:center">${pod.foto ? "✓ foto pronta" : "✓ foto già pubblicata"}</span>` : ""}</div></div>
   </div><button class="b big" onclick="podAnteprima()">👁 Anteprima</button></section>`;
-  if (pod.prev) h += `<section><h2>Anteprima</h2><div class="card prev-podio">${pod.url ? `<img src="${pod.url}">` : ""}${esc(pod.prev.caption)}</div>
+  const urlPrev = pod.url || (pod.tieni ? pod.pubUrl : null);
+  if (pod.prev) h += `<section><h2>Anteprima</h2><div class="card prev-podio">${urlPrev ? `<img src="${urlPrev}">` : ""}${esc(pod.prev.caption)}</div>
     ${pod.prev.avviso ? `<p class="muted" style="margin:0 6px 8px">${esc(pod.prev.avviso)}</p>` : ""}
-    <button class="b pri big" onclick="podPubblica()" ${P.gruppo?"":"disabled"}>📢 Pubblica nel gruppo</button></section>`;
+    <button class="b pri big" onclick="podPubblica()" ${P.gruppo?"":"disabled"}>${pod.ha_podio ? "🔄 Sostituisci nel gruppo" : "📢 Pubblica nel gruppo"}</button></section>`;
   return h;
 }
+function podModifica(){
+  const q = pod.pub;
+  Object.assign(pod, {primo:q.primo, secondo:q.secondo, terzo:q.terzo, desc:q.descrizione, tieni:q.foto, prev:null});
+  if (pod.url) URL.revokeObjectURL(pod.url);
+  pod.foto = null; pod.url = null;
+  render(); toast("Podio nel modulo: cambia quello che serve e fai l'anteprima");
+}
 function podFoto(file){
-  pod.prev = null;
+  pod.prev = null; pod.tieni = false;
   if (pod.url) URL.revokeObjectURL(pod.url);
   pod.foto = null; pod.url = null;
   if (!file) { render(); return; }
@@ -969,6 +1038,7 @@ async function podInvia(modo){
   f.append("modo", modo); f.append("torneo_id", pod.tid);
   ["primo","secondo","terzo"].forEach(k => f.append(k, pod[k])); f.append("descrizione", pod.desc);
   if (pod.foto) f.append("foto", pod.foto, "podio.jpg");
+  else if (pod.tieni) f.append("tieni_foto", "1");
   try{
     const r = await fetch("/api/pannello/podio", {method:"POST", headers:{"X-Init-Data":INIT}, body:f});
     const d = await r.json();
@@ -981,12 +1051,13 @@ async function podAnteprima(){
   if (d) { pod.prev = d; render(); setTimeout(()=>window.scrollTo(0, document.body.scrollHeight), 50); }
 }
 async function podPubblica(){
-  if (!await chiedi(`Pubblicare il podio di «${pod.nome}» nel gruppo?`)) return;
+  if (!await chiedi(pod.ha_podio ? `Sostituire il podio di «${pod.nome}» nel gruppo?\nIl post vecchio viene tolto, il nuovo esce con «🔄 Podio aggiornato».` : `Pubblicare il podio di «${pod.nome}» nel gruppo?`)) return;
   const d = await podInvia("pubblica");
   if (!d) return;
   vibra("success"); toast(d.testo);
   if (pod.url) URL.revokeObjectURL(pod.url);
-  pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[]};
+  if (pod.pubUrl) URL.revokeObjectURL(pod.pubUrl);
+  pod = {tid:null, primo:"", secondo:"", terzo:"", desc:"", foto:null, url:null, prev:null, squadre:[], pub:null, pubUrl:null, tieni:false};
   await caricaPannello();
 }
 

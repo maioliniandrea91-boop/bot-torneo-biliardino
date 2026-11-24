@@ -7,6 +7,7 @@ privata col bot (con i soliti bottoni, così funziona anche da lì).
 
 API (solo admin):
   GET  /api/pannello/locandina          valori base, bozza in corso, programmate, ultima pubblicata
+  POST azione «modulo» (dati per Modifica), «file» (PNG in chat privata), «anteprima» con «corregge»
   GET  /api/pannello/locandina/img?id=N immagine PNG della locandina
   POST /api/pannello/locandina          {"azione": ..., ...}  (JSON)
 """
@@ -89,7 +90,9 @@ def _scheda(conn, lid: int) -> dict:
     didascalia, extra, nuovo, ripeti, stato, quando = conn.execute(
         "SELECT didascalia, extra, nuovo_torneo, ripeti, stato, pubblica_il FROM locandine WHERE id = ?",
         (lid,)).fetchone()
+    vid, vstato = C._sostituita(conn, lid)
     return {"id": lid, "extra": extra or "", "nuovo_torneo": bool(nuovo), "ripeti": bool(ripeti),
+            "corregge": vid if vstato in ("pubblicata", "programmata") else None, "corregge_stato": vstato,
             "stato": stato, "caption": C._caption_anteprima(lid, C._testo_completo(didascalia, extra)),
             "quando": datetime.fromisoformat(quando).astimezone(C.FUSO).strftime("%d/%m %H:%M") if quando else None}
 
@@ -168,7 +171,14 @@ async def h_azione(req):
         if bot is None:
             return pannello._json(False, "Bot non disponibile.")
         extra = str(d.get("extra") or "").strip() or None
-        lid = C.crea_bozza(conn, dati, bool(d.get("nuovo_torneo", True)), bool(d.get("ripeti", True)), extra)
+        corregge = d.get("corregge")   # modifica di una locandina programmata o già pubblicata
+        if corregge is not None:
+            st = conn.execute("SELECT stato FROM locandine WHERE id = ?", (corregge,)).fetchone() \
+                if isinstance(corregge, int) else None
+            if not st or st[0] not in ("programmata", "pubblicata"):
+                return pannello._json(False, "La locandina da modificare non è più programmata né pubblicata.")
+        lid = C.crea_bozza(conn, dati, bool(d.get("nuovo_torneo", True)), bool(d.get("ripeti", True)), extra,
+                           sostituisce=corregge)
         if len(C._caption_anteprima(lid, C._testo_completo(C._didascalia(dati), extra))) > C.LIMITE_DIDASCALIA:
             conn.execute("DELETE FROM locandine WHERE id = ?", (lid,))
             conn.commit()
@@ -204,6 +214,31 @@ async def h_azione(req):
     esiste = lid is not None and conn.execute("SELECT 1 FROM locandine WHERE id = ?", (lid,)).fetchone()
     if az != "ripubblica" and not esiste:
         return pannello._json(False, "Locandina non trovata.")
+
+    if az == "modulo":   # dati della locandina per riaprirla nel modulo (Modifica)
+        dati = C.dati_salvati(conn, lid)
+        extra, ripeti = conn.execute("SELECT extra, ripeti FROM locandine WHERE id = ?", (lid,)).fetchone()
+        return pannello._json(True, "", modulo={
+            "data": dati["data"].isoformat() if dati["data"] else None, "formule": dati["formula"],
+            "cinque_x": bool(dati["cinque_x"]), "ora": dati["ora"], "quota": dati["quota"], "premi": dati["premi"],
+            "max": dati["max_coppie"], "extra": extra or "", "ripeti": bool(ripeti), "parziale": dati["parziale"]})
+
+    if az == "file":   # PNG originale nella chat privata col bot, da salvare o inoltrare
+        if bot is None:
+            return pannello._json(False, "Bot non disponibile.")
+        dati = C.dati_salvati(conn, lid)
+        file_id, nome = conn.execute("SELECT file_id, nome_torneo FROM locandine WHERE id = ?", (lid,)).fetchone()
+        try:
+            if not dati["parziale"]:
+                png = await C.genera_png(dati)   # rigenerata: piena qualità
+            else:   # locandina vecchia: quota e premi non salvati, uso l'immagine uscita
+                png = bytes(await (await bot.get_file(file_id)).download_as_bytearray())
+            nome_file = "locandina_" + "".join(c if c.isalnum() else "_" for c in (nome or str(lid))) + ".png"
+            await bot.send_document(chat_id=uid, document=png, filename=nome_file,
+                                    caption=f"Locandina n° {lid} {nome or ''}".strip())
+        except Exception as e:
+            return pannello._json(False, f"Non riesco a mandartela in chat ({e}). Apri la chat col bot e premi Avvia.")
+        return pannello._json(True, "📥 Locandina mandata nella chat col bot.")
 
     if az == "testo":
         stato = conn.execute("SELECT stato FROM locandine WHERE id = ?", (lid,)).fetchone()[0]
